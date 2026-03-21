@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Межпланетный маневр"
+    Manufacturer="VladAndMasha"
+    Version="0.1.0"
+    UpgradeCode="{4D4D1A3E-19D8-4207-9B7A-EDC97D1C06B6}"
+    ProductCode="*"
+    Language="1049"
+    Compressed="yes"
+    Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="Уже установлена более новая версия [ProductName]." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.BrandingDir)\setup.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Межпланетный маневр" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuDir" Name="Межпланетный маневр" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="cmpDesktop" Guid="{9F6D8E13-0F23-4D5B-BE70-6E521A1559B2}">
+        <Shortcut
+          Id="scDesktop"
+          Name="Межпланетный маневр"
+          Description="Межпланетный маневр"
+          Target="[INSTALLFOLDER]InterplanetaryManeuver.App.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="AppIcon" />
+        <RegistryValue Root="HKCU" Key="Software\VladAndMasha\InterplanetaryManeuver" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="cmpMain" Guid="{C1304E38-0B7D-4B5D-A8B1-16D7B1C2D4E2}">
+        <File Id="filAppExe" Source="$(var.PublishDir)\InterplanetaryManeuver.App.exe" KeyPath="yes" />
+        <File Id="filIco" Source="$(var.BrandingDir)\setup.ico" Name="InterplanetaryManeuver.ico" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ProgramMenuDir">
+      <Component Id="cmpStartMenu" Guid="{3EE9B20C-11C5-46D2-8DCE-1C1B04C8D4DB}">
+        <Shortcut
+          Id="scStartMenu"
+          Name="Межпланетный маневр"
+          Description="Межпланетный маневр"
+          Target="[INSTALLFOLDER]InterplanetaryManeuver.App.exe"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="AppIcon" />
+        <RemoveFolder Id="rfProgramMenuDir" Directory="ProgramMenuDir" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\VladAndMasha\InterplanetaryManeuver" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="Межпланетный маневр" Level="1">
+      <ComponentRef Id="cmpMain" />
+      <ComponentRef Id="cmpStartMenu" />
+      <ComponentRef Id="cmpDesktop" />
+    </Feature>
+  </Package>
+</Wix>

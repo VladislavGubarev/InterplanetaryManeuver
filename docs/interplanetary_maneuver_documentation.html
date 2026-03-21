@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Межпланетный манёвр — техническая документация</title>
+  <link rel="stylesheet" href="documentation.css" />
+</head>
+<body>
+  <main>
+<h1>Межпланетный манёвр</h1>
+<h2>Техническая документация проекта</h2>
+<p>Версия документа: 1.0<br>Дата: 2026-03-21<br>Проект: <code>InterplanetaryManeuver</code><br>Платформа: <code>WPF / .NET 8</code><br>Численный метод: <code>Dormand-Prince RK-45</code></p>
+<hr>
+<h2>1. Назначение программы</h2>
+<p>Приложение предназначено для численного моделирования гравитационного манёвра космического аппарата у Юпитера с целью получить максимальный полезный прирост скорости при дальнейшем движении в направлении Сатурна.</p>
+<p>В текущей реализации программа решает три связанных класса задач:</p>
+<ol>
+<li>моделирование движения системы тел в ньютоновской постановке <code>N-body</code>;</li>
+<li>анализ пролёта аппарата через сферу влияния Юпитера;</li>
+<li>перебор параметров сближения и выбор лучшего варианта по целевой функции.</li>
+</ol>
+<p>Дополнительно в приложении реализованы:</p>
+<ul>
+<li>загрузка начальных состояний тел через <code>NASA/JPL Horizons API</code>;</li>
+<li>построение графиков траекторий и скоростей;</li>
+<li>анимация орбитальной сцены;</li>
+<li>песочница с произвольными телами.</li>
+</ul>
+<hr>
+<h2>2. Структура проекта</h2>
+<h3>2.1. Основные модули</h3>
+<ul>
+<li><code>PhysicsSim.Core</code> — физическая модель, интегратор, структуры данных результата;</li>
+<li><code>InterplanetaryManeuver.App</code> — WPF-приложение, UI, сценарии, оптимизация, анимация;</li>
+<li><code>installer</code> и <code>installer-msi</code> — сборка установщиков.</li>
+</ul>
+<h3>2.2. Ключевые файлы</h3>
+<ul>
+<li><code>PhysicsSim.Core/NBodySystem.cs</code></li>
+<li><code>PhysicsSim.Core/NBodySimulator.cs</code></li>
+<li><code>PhysicsSim.Core/Ode/DormandPrince45.cs</code></li>
+<li><code>PhysicsSim.Core/FlybyAnalysis.cs</code></li>
+<li><code>InterplanetaryManeuver.App/Services/HorizonsEphemerisService.cs</code></li>
+<li><code>InterplanetaryManeuver.App/Services/ScenarioFactory.cs</code></li>
+<li><code>InterplanetaryManeuver.App/ViewModels/MainViewModel.cs</code></li>
+<li><code>InterplanetaryManeuver.App/Controls/Plot2DControl.cs</code></li>
+<li><code>InterplanetaryManeuver.App/Controls/OrbitSceneControl.cs</code></li>
+</ul>
+<hr>
+<h2>3. Математическая модель</h2>
+<h3>3.1. Выбор модели</h3>
+<p>В проекте используется <strong>ньютоновская модель гравитационного взаимодействия N тел</strong>.<br>Каждое тело описывается массой <code>m_i</code>, радиус-вектором <code>r_i(t)</code> и скоростью <code>v_i(t)</code>.</p>
+<p>Состояние системы записывается как</p>
+<pre><code class="language-text">y(t) = (r_1, v_1, r_2, v_2, ..., r_N, v_N)
+</code></pre>
+<p>где для каждого тела используются 6 компонент:</p>
+<pre><code class="language-text">(x, y, z, vx, vy, vz)
+</code></pre>
+<h3>3.2. Основные дифференциальные уравнения</h3>
+<p>Для каждого тела <code>i</code> решается система</p>
+<pre><code class="language-text">r_i&#39; = v_i
+v_i&#39; = Σ(j != i) G * m_j * (r_j - r_i) / |r_j - r_i|^3
+</code></pre>
+<p>где:</p>
+<ul>
+<li><code>G</code> — гравитационная постоянная;</li>
+<li><code>m_j</code> — масса тела <code>j</code>;</li>
+<li><code>r_j - r_i</code> — относительный радиус-вектор;</li>
+<li><code>|r_j - r_i|</code> — расстояние между телами.</li>
+</ul>
+<p>Это именно та формула, которая реализована в <code>PhysicsSim.Core/NBodySystem.cs</code>.</p>
+<h3>3.3. Компонентная форма</h3>
+<p>Для координат и скоростей по осям:</p>
+<pre><code class="language-text">x_i&#39;  = vx_i
+y_i&#39;  = vy_i
+z_i&#39;  = vz_i
+
+vx_i&#39; = Σ(j != i) G * m_j * (x_j - x_i) / ((x_j - x_i)^2 + (y_j - y_i)^2 + (z_j - z_i)^2)^(3/2)
+vy_i&#39; = Σ(j != i) G * m_j * (y_j - y_i) / ((x_j - x_i)^2 + (y_j - y_i)^2 + (z_j - z_i)^2)^(3/2)
+vz_i&#39; = Σ(j != i) G * m_j * (z_j - z_i) / ((x_j - x_i)^2 + (y_j - y_i)^2 + (z_j - z_i)^2)^(3/2)
+</code></pre>
+<h3>3.4. Система отсчёта</h3>
+<p>По умолчанию система переводится в <strong>барицентрическую систему отсчёта</strong>.</p>
+<p>Используются формулы центра масс:</p>
+<pre><code class="language-text">R_cm = (Σ m_i r_i) / (Σ m_i)
+V_cm = (Σ m_i v_i) / (Σ m_i)
+</code></pre>
+<p>После этого все начальные состояния сдвигаются:</p>
+<pre><code class="language-text">r_i := r_i - R_cm
+v_i := v_i - V_cm
+</code></pre>
+<p>Эта операция выполняется в <code>ShiftInitialStateToBarycentricFrame()</code> внутри <code>PhysicsSim.Core/NBodySystem.cs</code>.</p>
+<hr>
+<h2>4. Начальные данные и единицы измерения</h2>
+<h3>4.1. Внутренние единицы</h3>
+<p>Внутри расчёта используются только единицы SI:</p>
+<ul>
+<li>расстояние — <code>м</code>;</li>
+<li>скорость — <code>м/с</code>;</li>
+<li>масса — <code>кг</code>;</li>
+<li>время — <code>с</code>.</li>
+</ul>
+<h3>4.2. Отображение в интерфейсе</h3>
+<p>В UI используются более удобные единицы:</p>
+<ul>
+<li>межпланетные расстояния — <code>а.е.</code>;</li>
+<li>скорости — <code>км/с</code>;</li>
+<li>время — <code>сутки</code> или <code>часы</code>.</li>
+</ul>
+<h3>4.3. Физические константы</h3>
+<p>Значения заданы в <code>PhysicsSim.Core/AstronomyConstants.cs</code>:</p>
+<pre><code class="language-text">1 а.е. = 1.495978707e11 м
+M☉     = 1.98847e30 кг
+M_J    = 1.89813e27 кг
+M_S    = 5.6834e26 кг
+R_J    = 7.1492e7 м
+R_S    = 5.8232e7 м
+</code></pre>
+<hr>
+<h2>5. Эфемериды</h2>
+<h3>5.1. Что такое эфемериды</h3>
+<p>Эфемериды — это данные о положении и скорости небесного тела в конкретный момент времени.</p>
+<p>Для данной программы это означает, что начальные состояния Солнца, Юпитера и Сатурна не задаются вручную, а загружаются из внешнего астрономического источника.</p>
+<h3>5.2. Источник данных</h3>
+<p>В программе используется <code>NASA/JPL Horizons API</code> через файл</p>
+<ul>
+<li><code>InterplanetaryManeuver.App/Services/HorizonsEphemerisService.cs</code></li>
+</ul>
+<p>Сервис запрашивает векторы состояния (<code>EPHEM_TYPE=&#39;VECTORS&#39;</code>) в системе <code>ICRF</code> и в единицах <code>KM-S</code>, затем переводит их в SI.</p>
+<h3>5.3. Что загружается</h3>
+<p>Для каждого тела загружаются:</p>
+<pre><code class="language-text">X, Y, Z, VX, VY, VZ
+</code></pre>
+<p>То есть полное начальное состояние в момент <code>epochUtc</code>.</p>
+<h3>5.4. Кэширование</h3>
+<p>Полученные эфемериды кэшируются локально в каталоге пользователя, чтобы уменьшить число повторных запросов.</p>
+<hr>
+<h2>6. Формирование сценария гравитационного манёвра</h2>
+<h3>6.1. Базовый сценарий</h3>
+<p>Сценарий строится в <code>InterplanetaryManeuver.App/Services/ScenarioFactory.cs</code>.</p>
+<p>В базовой задаче используются тела:</p>
+<ul>
+<li>Солнце;</li>
+<li>Юпитер;</li>
+<li>Сатурн;</li>
+<li>космический аппарат.</li>
+</ul>
+<h3>6.2. Сфера влияния Юпитера</h3>
+<p>Радиус сферы влияния вычисляется по формуле Лапласа:</p>
+<pre><code class="language-text">r_SOI = a * (m_planet / m_central)^(2/5)
+</code></pre>
+<p>где:</p>
+<ul>
+<li><code>a</code> — большая полуось орбиты Юпитера;</li>
+<li><code>m_planet</code> — масса Юпитера;</li>
+<li><code>m_central</code> — масса Солнца.</li>
+</ul>
+<p>Это реализовано в <code>PhysicsSim.Core/FlybyAnalysis.cs</code>.</p>
+<h3>6.3. Начальное положение аппарата</h3>
+<p>Для аппарата вектор положения строится относительно Юпитера.</p>
+<p>Обозначения:</p>
+<ul>
+<li><code>e_r</code> — радиальное направление от Солнца к Юпитеру;</li>
+<li><code>e_t</code> — касательное направление орбитального движения Юпитера;</li>
+<li><code>e_n</code> — нормаль к плоскости, получаемая через векторное произведение.</li>
+</ul>
+<p>Затем создаётся повёрнутое радиальное направление:</p>
+<pre><code class="language-text">e_phase = cos(phi) * e_r + sin(phi) * e_t
+</code></pre>
+<p>где <code>phi</code> — фазовый угол входа.</p>
+<p>Стартовая позиция аппарата:</p>
+<pre><code class="language-text">r_sc,0 = r_J + D_start * e_phase
+D_start = max(1.05, k_start) * r_SOI
+</code></pre>
+<p>где:</p>
+<ul>
+<li><code>r_J</code> — положение Юпитера;</li>
+<li><code>k_start</code> — множитель стартовой дистанции;</li>
+<li><code>r_SOI</code> — радиус сферы влияния.</li>
+</ul>
+<h3>6.4. Начальная скорость аппарата</h3>
+<p>Сначала строится направление относительной скорости входа:</p>
+<pre><code class="language-text">e_in = -e_phase
+e_lat = e_n × e_phase
+e_v = cos(alpha) * e_in + sin(alpha) * e_lat
+</code></pre>
+<p>где <code>alpha</code> — угол входа.</p>
+<p>Тогда абсолютная скорость аппарата:</p>
+<pre><code class="language-text">v_sc,0 = v_J + v_inf * e_v
+</code></pre>
+<p>где:</p>
+<ul>
+<li><code>v_J</code> — скорость Юпитера;</li>
+<li><code>v_inf</code> — гиперболическая скорость входа относительно Юпитера.</li>
+</ul>
+<h3>6.5. Параметры настройки пролёта</h3>
+<p>В приложении используются следующие параметры:</p>
+<ul>
+<li><code>StartDistanceMultiplier</code></li>
+<li><code>PhaseAngleDeg</code></li>
+<li><code>HeadingAngleDeg</code></li>
+<li><code>VInfinityKms</code></li>
+</ul>
+<p>Они определены в <code>InterplanetaryManeuver.App/Models/FlybySetup.cs</code>.</p>
+<hr>
+<h2>7. Численный метод: Dormand-Prince RK-45</h2>
+<h3>7.1. Общая идея</h3>
+<p>Интегратор находится в</p>
+<ul>
+<li><code>PhysicsSim.Core/Ode/DormandPrince45.cs</code></li>
+</ul>
+<p>Используется адаптивная схема <code>RK 5(4)</code>:</p>
+<ul>
+<li>решение пятого порядка принимается как основное;</li>
+<li>решение четвёртого порядка используется для оценки локальной ошибки.</li>
+</ul>
+<h3>7.2. Вектор стадий</h3>
+<p>На каждом шаге вычисляются стадии</p>
+<pre><code class="language-text">k1, k2, k3, k4, k5, k6, k7
+</code></pre>
+<p>по таблице коэффициентов Dormand–Prince.</p>
+<h3>7.3. Оценка ошибки</h3>
+<p>Если <code>y_new</code> — решение 5-го порядка, а <code>y_4</code> — вложенное решение 4-го порядка, то локальная ошибка определяется как</p>
+<pre><code class="language-text">y_err = y_new - y_4
+</code></pre>
+<p>Нормированная RMS-ошибка:</p>
+<pre><code class="language-text">scale_i = AbsTol + RelTol * max(|y_i|, |y_new_i|)
+r_i     = y_err_i / scale_i
+err     = sqrt( (1/n) * Σ r_i^2 )
+</code></pre>
+<p>Шаг принимается, если</p>
+<pre><code class="language-text">err &lt;= 1
+</code></pre>
+<h3>7.4. Адаптация шага</h3>
+<p>Новый шаг вычисляется по формуле</p>
+<pre><code class="language-text">h_new = h * clamp( safety * (1 / err)^(1/5), facMin, facMax )
+</code></pre>
+<p>где в коде используются:</p>
+<pre><code class="language-text">safety = 0.9
+facMin = 0.2
+facMax = 5.0
+</code></pre>
+<h3>7.5. Настройки интегрирования</h3>
+<p>Параметры находятся в <code>PhysicsSim.Core/Ode/IntegrationSettings.cs</code>:</p>
+<ul>
+<li><code>AbsTol</code></li>
+<li><code>RelTol</code></li>
+<li><code>MinStep</code></li>
+<li><code>MaxStep</code></li>
+<li><code>InitialStep</code></li>
+<li><code>MaxAcceptedSteps</code></li>
+</ul>
+<h3>7.6. Фиксированный вывод результатов</h3>
+<p>Хотя шаг интегрирования адаптивный, результаты сохраняются через фиксированный интервал <code>outputDt</code>.</p>
+<p>То есть схема такая:</p>
+<ol>
+<li>интегратор движется адаптивно;</li>
+<li>но каждая выходная точка принудительно совпадает с заданным временем выборки;</li>
+<li>это удобно для графиков, анимации и экспорта.</li>
+</ol>
+<hr>
+<h2>8. Расчёт метрик гравитационного манёвра</h2>
+<h3>8.1. Минимальное расстояние до Юпитера</h3>
+<p>Для каждого дискретного момента времени вычисляется</p>
+<pre><code class="language-text">r_J,sc(t) = |r_sc(t) - r_J(t)|
+</code></pre>
+<p>и сохраняется минимум.</p>
+<h3>8.2. Вход и выход из SOI</h3>
+<p>Считается, что аппарат вошёл в сферу влияния, если</p>
+<pre><code class="language-text">|r_sc - r_J| &lt;= r_SOI
+</code></pre>
+<p>Запоминаются индексы:</p>
+<ul>
+<li><code>EntryIndex</code> — первый момент входа;</li>
+<li><code>ExitIndex</code> — первый момент выхода после входа.</li>
+</ul>
+<h3>8.3. Скорости</h3>
+<p>Используются относительные скорости:</p>
+<pre><code class="language-text">v_rel(a,b,t) = |v_a(t) - v_b(t)|
+</code></pre>
+<p>Из них строятся:</p>
+<ul>
+<li>начальная и конечная гелиоцентрические скорости аппарата;</li>
+<li>скорость аппарата относительно Юпитера до и после пролёта.</li>
+</ul>
+<h3>8.4. Основной прирост скорости</h3>
+<p>Полезный прирост скорости в проекте определяется так:</p>
+<pre><code class="language-text">Δv_gain = |v_sc - v_sun|_(exit) - |v_sc - v_sun|_(entry)
+</code></pre>
+<p>То есть сравниваются именно <strong>гелиоцентрические</strong> скорости аппарата на входе и выходе из сферы влияния Юпитера.</p>
+<p>Это реализовано в <code>PhysicsSim.Core/FlybyAnalysis.cs</code>.</p>
+<h3>8.5. Дополнительная метрика Сатурна</h3>
+<p>Для контроля пригодности траектории вычисляется минимальное расстояние от аппарата до Сатурна:</p>
+<pre><code class="language-text">r_S,min = min_t |r_sc(t) - r_S(t)|
+</code></pre>
+<hr>
+<h2>9. Целевая функция оптимизации</h2>
+<p>Оптимизация в приложении сейчас реализована как <strong>полный сеточный перебор</strong> (<code>grid search</code>).</p>
+<p>Параметры перебора:</p>
+<ul>
+<li>фазовый угол <code>phi</code>;</li>
+<li>угол входа <code>alpha</code>;</li>
+<li>гиперболическая скорость <code>v_inf</code>.</li>
+</ul>
+<p>Для каждой комбинации выполняется полная симуляция и вычисляется score.</p>
+<h3>9.1. Формула score</h3>
+<p>В коде (<code>MainViewModel.ScoreCandidate</code>) используется функция</p>
+<pre><code class="language-text">score = Δv_gain_kms - saturnMiss_AU - 5 * jupiterPenalty
+</code></pre>
+<p>где</p>
+<pre><code class="language-text">Δv_gain_kms = Δv_gain / 1000
+saturnMiss_AU = r_S,min / AU
+jupiterPenalty = max(0, (2*R_J - r_J,min) / R_J)
+</code></pre>
+<p>Смысл членов функции:</p>
+<ul>
+<li><code>Δv_gain_kms</code> — поощряет прирост скорости;</li>
+<li><code>saturnMiss_AU</code> — штрафует за большой промах мимо Сатурна;</li>
+<li><code>jupiterPenalty</code> — штрафует за слишком опасное сближение с Юпитером.</li>
+</ul>
+<h3>9.2. Особый случай</h3>
+<p>Если аппарат вообще не пересёк сферу влияния Юпитера, то кандидату сразу назначается большой штраф:</p>
+<pre><code class="language-text">score = -1e9
+</code></pre>
+<hr>
+<h2>10. Графики и анимация</h2>
+<h3>10.1. Что строится</h3>
+<p>После расчёта приложение формирует:</p>
+<ul>
+<li>траектории тел в плоскости <code>X-Y</code> относительно Солнца;</li>
+<li>график <code>|v|</code> аппарата;</li>
+<li>графики компонент <code>Vx</code>, <code>Vy</code>, <code>Vz</code>;</li>
+<li>орбитальную анимацию.</li>
+</ul>
+<h3>10.2. Формулы для графиков скорости</h3>
+<p>Гелиоцентрическая скорость аппарата:</p>
+<pre><code class="language-text">v_helio(t) = v_sc(t) - v_sun(t)
+|v|(t) = sqrt(vx^2 + vy^2 + vz^2)
+</code></pre>
+<p>Компоненты на графике:</p>
+<pre><code class="language-text">Vx(t), Vy(t), Vz(t)
+</code></pre>
+<h3>10.3. Анимация</h3>
+<p>Орбитальная сцена (<code>OrbitSceneControl.cs</code>) использует:</p>
+<ul>
+<li>относительные положения тел;</li>
+<li>центрирование по выбранному центральному телу;</li>
+<li>следы траекторий;</li>
+<li>маркеры тел и подписи;</li>
+<li>шкалу кадров и регулируемую скорость воспроизведения.</li>
+</ul>
+<hr>
+<h2>11. Песочница пользовательских тел</h2>
+<p>В режиме песочницы пользователь может вручную задавать:</p>
+<ul>
+<li>имя тела;</li>
+<li>массу;</li>
+<li>координаты <code>X, Y, Z</code> в <code>а.е.</code>;</li>
+<li>скорости <code>Vx, Vy, Vz</code> в <code>км/с</code>.</li>
+</ul>
+<p>Далее значения переводятся в SI:</p>
+<pre><code class="language-text">x_m  = X_AU  * AU
+vx_ms = Vx_kms * 1000
+</code></pre>
+<p>Эта логика реализована в <code>InterplanetaryManeuver.App/Models/EditableBody.cs</code>.</p>
+<p>Если в именах присутствуют слова <code>Солнце</code>, <code>Юпитер</code>, <code>Сатурн</code>, <code>КА</code> или <code>spacecraft</code>, приложение автоматически распознаёт специальные роли тел для анализа и анимации.</p>
+<hr>
+<h2>12. Формат результата симуляции</h2>
+<p>Результат описывается классом <code>SimulationResult</code>:</p>
+<pre><code class="language-text">Times       : double[]
+BodyNames   : string[]
+Positions   : Vector3d[][]
+Velocities  : Vector3d[][]
+</code></pre>
+<p>Интерпретация:</p>
+<pre><code class="language-text">Positions[sample][body]
+Velocities[sample][body]
+</code></pre>
+<p>То есть сначала идёт индекс времени, затем индекс тела.</p>
+<hr>
+<h2>13. Основные допущения модели</h2>
+<p>В текущей версии проекта используются следующие допущения:</p>
+<ol>
+<li>модель ньютоновская, без ОТО;</li>
+<li>нет реактивной тяги и расхода массы аппарата;</li>
+<li>нет солнечного давления, атмосферного торможения и нецентральных гармоник поля;</li>
+<li>стартовое состояние аппарата задаётся аналитически относительно Юпитера;</li>
+<li>оптимизация пока является сеточным перебором, а не непрерывным оптимизатором.</li>
+</ol>
+<p>Эти допущения допустимы для учебного MVP и прозрачны для преподавателя при защите.</p>
+<hr>
+<h2>14. Что именно проверяет преподаватель</h2>
+<p>Если преподаватель будет придираться, важно акцентировать следующие моменты:</p>
+<h3>14.1. Уравнения движения реализованы явно</h3>
+<p>Они присутствуют в <code>PhysicsSim.Core/NBodySystem.cs</code> и полностью соответствуют ньютоновской постановке задачи <code>N-body</code>.</p>
+<h3>14.2. Интегратор не &quot;магический&quot;</h3>
+<p>В проекте не используется внешняя готовая физическая библиотека.<br>Адаптивный <code>Dormand-Prince RK 5(4)</code> реализован вручную в <code>PhysicsSim.Core/Ode/DormandPrince45.cs</code>.</p>
+<h3>14.3. Метрика манёвра формализована</h3>
+<p>Прирост скорости определяется не «на глаз», а по строгой формуле на входе/выходе из SOI Юпитера.</p>
+<h3>14.4. Оптимизация воспроизводима</h3>
+<p>Перебор идёт по конечной сетке параметров.<br>Каждый кандидат можно повторить, воспроизвести и показать на графиках.</p>
+<h3>14.5. Исходные состояния тел реалистичны</h3>
+<p>Солнце, Юпитер и Сатурн берутся из <code>NASA/JPL Horizons API</code>, а не из случайных вручную введённых значений.</p>
+<hr>
+<h2>15. Примеры кода</h2>
+<h3>15.1. Производные системы N тел</h3>
+<pre><code class="language-csharp">public void ComputeDerivatives(double t, ReadOnlySpan&lt;double&gt; y, Span&lt;double&gt; dy)
+{
+    for (int i = 0; i &lt; BodyCount; i++)
+    {
+        int baseIdx = i * 6;
+        dy[baseIdx + 0] = y[baseIdx + 3];
+        dy[baseIdx + 1] = y[baseIdx + 4];
+        dy[baseIdx + 2] = y[baseIdx + 5];
+    }
+
+    for (int i = 0; i &lt; BodyCount; i++)
+    {
+        int bi = i * 6;
+        double ax = 0, ay = 0, az = 0;
+        double xi = y[bi + 0];
+        double yi = y[bi + 1];
+        double zi = y[bi + 2];
+
+        for (int j = 0; j &lt; BodyCount; j++)
+        {
+            if (j == i) continue;
+            double mj = Masses[j];
+            int bj = j * 6;
+            double dx = y[bj + 0] - xi;
+            double dyv = y[bj + 1] - yi;
+            double dz = y[bj + 2] - zi;
+            double r2 = dx * dx + dyv * dyv + dz * dz;
+            double invR = 1.0 / Math.Sqrt(r2);
+            double invR3 = invR * invR * invR;
+            double k = GravitationalConstant * mj * invR3;
+            ax += k * dx;
+            ay += k * dyv;
+            az += k * dz;
+        }
+
+        dy[bi + 3] = ax;
+        dy[bi + 4] = ay;
+        dy[bi + 5] = az;
+    }
+}
+</code></pre>
+<h3>15.2. Оценка шага RK-45</h3>
+<pre><code class="language-csharp">private static double ComputeErrorNorm(
+    ReadOnlySpan&lt;double&gt; y,
+    ReadOnlySpan&lt;double&gt; yNew,
+    ReadOnlySpan&lt;double&gt; yErr,
+    double absTol,
+    double relTol)
+{
+    double sum = 0;
+    int n = y.Length;
+    for (int i = 0; i &lt; n; i++)
+    {
+        double scale = absTol + relTol * Math.Max(Math.Abs(y[i]), Math.Abs(yNew[i]));
+        double r = yErr[i] / scale;
+        sum += r * r;
+    }
+    return Math.Sqrt(sum / n);
+}
+</code></pre>
+<h3>15.3. Целевая функция оптимизации</h3>
+<pre><code class="language-csharp">private static double ScoreCandidate(FlybyMetrics metrics)
+{
+    if (!metrics.HasSphereOfInfluenceCrossing)
+        return -1e9;
+
+    double deltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0;
+    double saturnMissAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit;
+    double jupiterPenalty = Math.Max(
+        0.0,
+        (2.0 * AstronomyConstants.JupiterMeanRadius - metrics.MinDistanceToJupiter)
+        / AstronomyConstants.JupiterMeanRadius);
+
+    return deltaVGainKms - saturnMissAu - 5.0 * jupiterPenalty;
+}
+</code></pre>
+<h3>15.4. Прирост скорости на SOI Юпитера</h3>
+<pre><code class="language-csharp">double deltaVGain = RelativeSpeed(result, spacecraftIndex, sunIndex, vOutIndex)
+    - RelativeSpeed(result, spacecraftIndex, sunIndex, vInIndex);
+</code></pre>
+<hr>
+<h2>16. Как это можно формулировать на защите</h2>
+<p>Короткая строгая формулировка:</p>
+<blockquote>
+<p>В программе реализована ньютоновская N-body модель движения тел Солнечной системы. Система интегрируется адаптивным методом Dormand–Prince RK 5(4) с контролем локальной ошибки. Начальные состояния Солнца, Юпитера и Сатурна загружаются через NASA/JPL Horizons API. Космический аппарат задаётся параметрами входа в сферу влияния Юпитера. После моделирования вычисляется прирост гелиоцентрической скорости аппарата на входе и выходе из SOI Юпитера и выполняется оптимизация по сетке параметров сближения.</p>
+</blockquote>
+<hr>
+<h2>17. Ограничения и перспективы развития</h2>
+<p>Что можно честно сказать как ограничения текущей версии:</p>
+<ul>
+<li>пока не используется SPICE offline kernels;</li>
+<li>нет высокоточного учёта эллиптических элементов аппарата как отдельной задачи Ламберта;</li>
+<li>нет непрерывного оптимизатора типа Nelder–Mead / CMA-ES / differential evolution;</li>
+<li>нет учёта ограничений на перегрузку и минимальную высоту пролёта кроме штрафа в score.</li>
+</ul>
+<p>Что можно назвать развитием:</p>
+<ul>
+<li>переход на SPICE kernels;</li>
+<li>экспорт анимации в видео;</li>
+<li>более интеллектуальная оптимизация;</li>
+<li>расширение модели миссии до нескольких гравитационных манёвров.</li>
+</ul>
+<hr>
+<h2>18. Вывод</h2>
+<p>Проект <code>InterplanetaryManeuver</code> реализует законченный учебно-инженерный конвейер:</p>
+<ol>
+<li>получение реальных эфемерид;</li>
+<li>формирование начальной задачи;</li>
+<li>интегрирование N-body системы методом RK-45;</li>
+<li>вычисление метрик гравитационного манёвра;</li>
+<li>перебор параметров и выбор лучшего сценария;</li>
+<li>визуализацию результата в графиках и анимации.</li>
+</ol>
+<p>С точки зрения проверки преподавателем в проекте уже есть:</p>
+<ul>
+<li>строгая математическая постановка;</li>
+<li>прозрачная численная схема;</li>
+<li>воспроизводимый алгоритм оптимизации;</li>
+<li>явная связь формул и кода.</li>
+</ul>
+<hr>
+<h2>19. Список основных файлов проекта</h2>
+<pre><code class="language-text">PhysicsSim.Core/NBodySystem.cs
+PhysicsSim.Core/NBodySimulator.cs
+PhysicsSim.Core/Ode/DormandPrince45.cs
+PhysicsSim.Core/FlybyAnalysis.cs
+PhysicsSim.Core/FlybyMetrics.cs
+PhysicsSim.Core/AstronomyConstants.cs
+InterplanetaryManeuver.App/Services/HorizonsEphemerisService.cs
+InterplanetaryManeuver.App/Services/ScenarioFactory.cs
+InterplanetaryManeuver.App/ViewModels/MainViewModel.cs
+InterplanetaryManeuver.App/Models/FlybySetup.cs
+InterplanetaryManeuver.App/Models/OptimizationSettings.cs
+InterplanetaryManeuver.App/Controls/OrbitSceneControl.cs
+InterplanetaryManeuver.App/Controls/Plot2DControl.cs
+</code></pre>
+
+  </main>
+</body>
+</html>

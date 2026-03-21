@@ -1,0 +1,19 @@
+﻿.vs/
+
+**/bin/
+**/obj/
+
+# Публикация и установщики собираются локально, но в репозиторий не идут
+/dist/
+
+# Временные артефакты генерации документации
+/docs/*.fragment.html
+/docs/test.fragment.html
+
+# Пользовательские и системные файлы
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+Thumbs.db
+Desktop.ini
