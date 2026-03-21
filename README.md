@@ -77,8 +77,4 @@ dotnet run --project .\InterplanetaryManeuver.App\InterplanetaryManeuver.App.csp
 - расчет прироста скорости
 - структура реализации в коде
 
-## Замечания
-
-- В репозиторий не включаются артефакты сборки `bin/`, `obj/`, `dist/`, `.vs/`
-- Готовые `exe` и `msi` лучше публиковать через `GitHub Releases`, а не хранить в git
 
