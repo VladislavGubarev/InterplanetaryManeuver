@@ -758,3 +758,11 @@ InterplanetaryManeuver.App/Models/OptimizationSettings.cs
 InterplanetaryManeuver.App/Controls/OrbitSceneControl.cs
 InterplanetaryManeuver.App/Controls/Plot2DControl.cs
 ```
+
+---
+
+## 20. Репозиторий проекта
+
+Актуальная версия исходного кода проекта размещена в GitHub-репозитории:
+
+`https://github.com/VladislavGubarev/InterplanetaryManeuver`
