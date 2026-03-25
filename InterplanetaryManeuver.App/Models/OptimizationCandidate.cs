@@ -10,12 +10,12 @@ public sealed class OptimizationCandidate
     public required double MinJupiterDistanceKm { get; init; }
     public required double MinSaturnDistanceAu { get; init; }
     public required double Score { get; init; }
+    public required string Status { get; init; }
 
     public override string ToString()
     {
-        return $"#{Index}: score={Score:F3}, dV={DeltaVGainKms:F3} km/s, " +
+        return $"#{Index}: {Status}, score={Score:F3}, dV={DeltaVGainKms:F3} km/s, " +
                $"rJmin={MinJupiterDistanceKm:n0} km, rSmin={MinSaturnDistanceAu:F3} AU, " +
                $"phi={PhaseAngleDeg:F1} deg, alpha={HeadingAngleDeg:F1} deg, vInf={VInfinityKms:F2} km/s";
     }
 }
-

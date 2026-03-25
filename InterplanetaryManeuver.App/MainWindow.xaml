@@ -514,6 +514,67 @@
 
                                     <Border Style="{StaticResource SurfaceCard}">
                                         <StackPanel>
+                                            <TextBlock Text="Локальная доводка" Style="{StaticResource SectionTitle}" />
+                                            <CheckBox Content="Включить после сеточного перебора"
+                                                      IsChecked="{Binding UseLocalRefinement}"
+                                                      Margin="0,0,0,12" />
+
+                                            <TextBlock Text="Итерации" Style="{StaticResource FieldLabel}" />
+                                            <TextBox Text="{Binding LocalIterations, UpdateSourceTrigger=PropertyChanged}" />
+
+                                            <TextBlock Text="Порог нормы градиента" Style="{StaticResource FieldLabel}" Margin="0,10,0,6" />
+                                            <TextBox Text="{Binding GradientNormTolerance, UpdateSourceTrigger=PropertyChanged}" />
+
+                                            <TextBlock Text="Шаги дифференцирования" Style="{StaticResource FieldLabel}" Margin="0,12,0,6" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="8" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="8" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="Фаза, град" Style="{StaticResource FieldLabel}" />
+                                                    <TextBox Text="{Binding PhaseDerivativeStepDeg, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="2">
+                                                    <TextBlock Text="Угол, град" Style="{StaticResource FieldLabel}" />
+                                                    <TextBox Text="{Binding HeadingDerivativeStepDeg, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="4">
+                                                    <TextBlock Text="V∞, км/с" Style="{StaticResource FieldLabel}" />
+                                                    <TextBox Text="{Binding VInfinityDerivativeStepKms, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                            </Grid>
+
+                                            <TextBlock Text="Шаги обновления" Style="{StaticResource FieldLabel}" Margin="0,12,0,6" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="8" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="8" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="Фаза, град" Style="{StaticResource FieldLabel}" />
+                                                    <TextBox Text="{Binding PhaseMoveStepDeg, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="2">
+                                                    <TextBlock Text="Угол, град" Style="{StaticResource FieldLabel}" />
+                                                    <TextBox Text="{Binding HeadingMoveStepDeg, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="4">
+                                                    <TextBlock Text="V∞, км/с" Style="{StaticResource FieldLabel}" />
+                                                    <TextBox Text="{Binding VInfinityMoveStepKms, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Style="{StaticResource SurfaceCard}">
+                                        <StackPanel>
                                             <TextBlock Text="Поиск" Style="{StaticResource SectionTitle}" />
                                             <Button Content="Подобрать траекторию"
                                                     Style="{StaticResource Button.Primary}"
@@ -575,6 +636,15 @@
                                                    Margin="0,0,0,8" />
                                         <TextBlock Text="Используйте этот экран как демонстрационный режим: здесь видно движение тел по кадрам интегрирования и общий рисунок манёвра."
                                                    Foreground="#E7F5FF"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource SurfaceCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Статус пролёта" Style="{StaticResource SectionTitle}" />
+                                        <TextBlock Text="{Binding AnimationStatusText}"
+                                                   Foreground="{StaticResource Brush.Text1}"
                                                    TextWrapping="Wrap" />
                                     </StackPanel>
                                 </Border>
@@ -689,6 +759,7 @@
                                                                     <Grid.RowDefinitions>
                                                                         <RowDefinition Height="Auto" />
                                                                         <RowDefinition Height="Auto" />
+                                                                        <RowDefinition Height="Auto" />
                                                                     </Grid.RowDefinitions>
 
                                                                     <StackPanel>
@@ -729,6 +800,11 @@
                                                                     <StackPanel Grid.Row="1" Grid.Column="6" Margin="0,10,0,0">
                                                                         <TextBlock Text="Vz, км/с" Style="{StaticResource FieldLabel}" />
                                                                         <TextBox Text="{Binding VzKms, UpdateSourceTrigger=PropertyChanged}" />
+                                                                    </StackPanel>
+
+                                                                    <StackPanel Grid.Row="2" Margin="0,10,0,0">
+                                                                        <TextBlock Text="Радиус, км" Style="{StaticResource FieldLabel}" />
+                                                                        <TextBox Text="{Binding RadiusKm, UpdateSourceTrigger=PropertyChanged}" />
                                                                     </StackPanel>
                                                                 </Grid>
                                                             </StackPanel>

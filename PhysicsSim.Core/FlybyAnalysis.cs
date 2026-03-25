@@ -29,6 +29,7 @@ public static class FlybyAnalysis
         int minDistJIndex = 0;
         int entryIndex = -1;
         int exitIndex = -1;
+        int collisionIndex = -1;
 
         bool insidePrev = false;
         for (int i = 0; i < result.SampleCount; i++)
@@ -45,6 +46,8 @@ public static class FlybyAnalysis
                 entryIndex = i;
             if (!inside && insidePrev && entryIndex >= 0 && exitIndex < 0)
                 exitIndex = i;
+            if (collisionIndex < 0 && distJ <= AstronomyConstants.JupiterMeanRadius)
+                collisionIndex = i;
             insidePrev = inside;
 
             if (saturnIndex >= 0 && saturnIndex < result.BodyCount)
@@ -75,6 +78,7 @@ public static class FlybyAnalysis
             JupiterSoiRadius = planetSoiRadius,
             MinDistanceToJupiter = minDistJ,
             MinDistanceToSaturn = minDistSaturn,
+            ClosestApproachAltitudeToJupiter = minDistJ - AstronomyConstants.JupiterMeanRadius,
             InitialHeliocentricSpeed = initialHeliocentricSpeed,
             FinalHeliocentricSpeed = finalHeliocentricSpeed,
             InitialJupiterRelativeSpeed = initialJupiterRelativeSpeed,
@@ -83,6 +87,7 @@ public static class FlybyAnalysis
             EntryIndex = entryIndex,
             ExitIndex = exitIndex,
             ClosestApproachIndex = minDistJIndex,
+            JupiterCollisionIndex = collisionIndex,
         };
     }
 
@@ -91,4 +96,3 @@ public static class FlybyAnalysis
         return (result.Velocities[index][a] - result.Velocities[index][b]).Length();
     }
 }
-

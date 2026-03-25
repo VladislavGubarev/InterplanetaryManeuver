@@ -11,7 +11,15 @@ public sealed class OptimizationSettings
     public required double VInfinityMinKms { get; init; }
     public required double VInfinityMaxKms { get; init; }
     public required int VInfinitySamples { get; init; }
+    public required bool UseLocalRefinement { get; init; }
+    public required int LocalIterations { get; init; }
+    public required double GradientNormTolerance { get; init; }
+    public required double PhaseDerivativeStepDeg { get; init; }
+    public required double HeadingDerivativeStepDeg { get; init; }
+    public required double VInfinityDerivativeStepKms { get; init; }
+    public required double PhaseMoveStepDeg { get; init; }
+    public required double HeadingMoveStepDeg { get; init; }
+    public required double VInfinityMoveStepKms { get; init; }
 
     public int TotalSamples => PhaseSamples * HeadingSamples * VInfinitySamples;
 }
-

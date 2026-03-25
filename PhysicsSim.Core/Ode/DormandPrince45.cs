@@ -3,14 +3,16 @@ using System.Runtime.CompilerServices;
 namespace PhysicsSim.Core.Ode;
 
 public delegate void SampleHandler(double t, ReadOnlySpan<double> y);
+public delegate string? StopCondition(double t, double[] y);
 
 /// <summary>
-/// Адаптивный интегратор Dormand-Prince RK 5(4) с контролем ошибки.
-/// Выдаёт результаты через фиксированный интервал времени, точно попадая в моменты выборки.
+/// Адаптивный интегратор Dormand-Prince RK 5(4) с контролем локальной ошибки.
+/// Выдаёт результаты в фиксированные моменты времени и может завершаться досрочно
+/// по внешнему условию остановки, например при столкновении тел.
 /// </summary>
 public static class DormandPrince45
 {
-    public static void IntegrateFixedOutput(
+    public static string? IntegrateFixedOutput(
         IOdeSystem system,
         double t0,
         ReadOnlySpan<double> y0,
@@ -18,6 +20,7 @@ public static class DormandPrince45
         double outputDt,
         IntegrationSettings settings,
         SampleHandler onSample,
+        StopCondition? stopCondition = null,
         CancellationToken cancellationToken = default)
     {
         if (t1 <= t0) throw new ArgumentException("t1 must be > t0.", nameof(t1));
@@ -42,11 +45,26 @@ public static class DormandPrince45
         double nextOut = t0;
         double h = Clamp(settings.InitialStep, settings.MinStep, settings.MaxStep);
         int accepted = 0;
-
-        // Всегда отдаём t0, затем фиксированные точки внутри (t0, t1),
-        // и обязательно завершаем точкой t1.
         bool emittedT0 = false;
         bool emittedT1 = false;
+        double lastSampleTime = double.NaN;
+
+        void EmitSample(double time, double[] state)
+        {
+            if (!double.IsNaN(lastSampleTime) && Math.Abs(time - lastSampleTime) < 1e-12)
+                return;
+
+            onSample(time, state);
+            lastSampleTime = time;
+        }
+
+        string? CheckStop()
+        {
+            if (stopCondition is null)
+                return null;
+
+            return stopCondition(t, y);
+        }
 
         while (!emittedT1)
         {
@@ -54,14 +72,17 @@ public static class DormandPrince45
 
             if (!emittedT0)
             {
-                onSample(t, y);
+                EmitSample(t, y);
                 emittedT0 = true;
+                string? stopAtStart = CheckStop();
+                if (stopAtStart is not null)
+                    return stopAtStart;
+
                 nextOut = t0 + outputDt;
-                if (nextOut >= t1) nextOut = t1;
-                if (Math.Abs(t1 - t0) < 1e-12) { emittedT1 = true; break; }
+                if (nextOut >= t1)
+                    nextOut = t1;
             }
 
-            // Продвигаемся от текущего времени до следующей выходной точки.
             while (t < nextOut - 1e-12)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -69,7 +90,9 @@ public static class DormandPrince45
                     throw new InvalidOperationException("Exceeded max accepted steps. Relax tolerances or reduce interval.");
 
                 double hToTarget = nextOut - t;
-                if (h > hToTarget) h = hToTarget;
+                if (h > hToTarget)
+                    h = hToTarget;
+
                 h = Clamp(h, settings.MinStep, settings.MaxStep);
 
                 bool ok = TryStep(system, t, y, h, settings.AbsTol, settings.RelTol, yNew, yErr, k1, k2, k3, k4, k5, k6, k7, yTemp, out double errNorm);
@@ -78,26 +101,38 @@ public static class DormandPrince45
                     Array.Copy(yNew, y, n);
                     t += h;
                     accepted++;
+
+                    string? stopReason = CheckStop();
+                    if (stopReason is not null)
+                    {
+                        EmitSample(t, y);
+                        return stopReason;
+                    }
                 }
 
-                // Подстраиваем шаг даже в случае отклонённого шага.
                 h = SuggestNextStep(h, errNorm, ok);
             }
 
-            // Гарантируем, что попали точно в момент вывода.
             t = nextOut;
             if (Math.Abs(t - t1) < 1e-12)
             {
-                onSample(t1, y);
+                EmitSample(t1, y);
                 emittedT1 = true;
             }
             else
             {
-                onSample(t, y);
+                EmitSample(t, y);
+                string? stopReason = CheckStop();
+                if (stopReason is not null)
+                    return stopReason;
+
                 nextOut = t + outputDt;
-                if (nextOut >= t1) nextOut = t1;
+                if (nextOut >= t1)
+                    nextOut = t1;
             }
         }
+
+        return null;
     }
 
     private static bool TryStep(
@@ -141,9 +176,6 @@ public static class DormandPrince45
         Combine(y, h, k1, 35.0 / 384.0, k3, 500.0 / 1113.0, k4, 125.0 / 192.0, k5, -2187.0 / 6784.0, k6, 11.0 / 84.0, yNew);
         system.ComputeDerivatives(t + h, yNew, k7);
 
-        // Решение 5-го порядка уже находится в yNew.
-        // Ниже строится вложенное решение 4-го порядка для оценки ошибки:
-        // b* = [5179/57600, 0, 7571/16695, 393/640, -92097/339200, 187/2100, 1/40]
         for (int i = 0; i < n; i++)
         {
             double y4 = y[i]
@@ -167,13 +199,17 @@ public static class DormandPrince45
         const double safety = 0.9;
         const double facMin = 0.2;
         const double facMax = 5.0;
-        const double pow = 0.2; // 1/(order+1), так как ошибка вложенной схемы 4-го порядка ~ O(h^5)
+        const double pow = 0.2;
 
-        if (errNorm <= 0) errNorm = 1e-16;
+        if (errNorm <= 0)
+            errNorm = 1e-16;
+
         double fac = safety * Math.Pow(1.0 / errNorm, pow);
         fac = Clamp(fac, facMin, facMax);
         double hNew = h * fac;
-        if (!accepted) hNew = Math.Min(hNew, h); // После отклонения шаг не увеличиваем.
+        if (!accepted)
+            hNew = Math.Min(hNew, h);
+
         return hNew;
     }
 
@@ -187,6 +223,7 @@ public static class DormandPrince45
             double r = yErr[i] / scale;
             sum += r * r;
         }
+
         return Math.Sqrt(sum / n);
     }
 

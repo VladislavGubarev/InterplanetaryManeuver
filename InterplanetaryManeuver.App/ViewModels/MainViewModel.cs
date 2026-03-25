@@ -55,6 +55,15 @@ public sealed class MainViewModel : ObservableObject
     private double _optVInfinityMinKms = 6.5;
     private double _optVInfinityMaxKms = 13.0;
     private int _optVInfinitySamples = 6;
+    private bool _useLocalRefinement = true;
+    private int _localIterations = 8;
+    private double _gradientNormTolerance = 0.05;
+    private double _phaseDerivativeStepDeg = 0.5;
+    private double _headingDerivativeStepDeg = 0.25;
+    private double _vInfinityDerivativeStepKms = 0.05;
+    private double _phaseMoveStepDeg = 1.0;
+    private double _headingMoveStepDeg = 0.5;
+    private double _vInfinityMoveStepKms = 0.1;
     private EditableBody? _selectedCustomBody;
     private string _sandboxText = "Песочница еще не запускалась.";
     private AnimationSceneData? _animationScene;
@@ -62,6 +71,7 @@ public sealed class MainViewModel : ObservableObject
     private int _animationFrameCount;
     private bool _isAnimationPlaying;
     private double _animationSpeedMultiplier = 1.0;
+    private string _animationStatusText = "Запустите расчёт, чтобы увидеть статус пролёта.";
 
     private SimulationResult? _lastResult;
     private SimulationScenario? _lastScenario;
@@ -251,6 +261,60 @@ public sealed class MainViewModel : ObservableObject
         set => SetProperty(ref _optVInfinitySamples, value);
     }
 
+    public bool UseLocalRefinement
+    {
+        get => _useLocalRefinement;
+        set => SetProperty(ref _useLocalRefinement, value);
+    }
+
+    public int LocalIterations
+    {
+        get => _localIterations;
+        set => SetProperty(ref _localIterations, Math.Max(1, value));
+    }
+
+    public double GradientNormTolerance
+    {
+        get => _gradientNormTolerance;
+        set => SetProperty(ref _gradientNormTolerance, Math.Max(1e-6, value));
+    }
+
+    public double PhaseDerivativeStepDeg
+    {
+        get => _phaseDerivativeStepDeg;
+        set => SetProperty(ref _phaseDerivativeStepDeg, Math.Max(1e-4, value));
+    }
+
+    public double HeadingDerivativeStepDeg
+    {
+        get => _headingDerivativeStepDeg;
+        set => SetProperty(ref _headingDerivativeStepDeg, Math.Max(1e-4, value));
+    }
+
+    public double VInfinityDerivativeStepKms
+    {
+        get => _vInfinityDerivativeStepKms;
+        set => SetProperty(ref _vInfinityDerivativeStepKms, Math.Max(1e-4, value));
+    }
+
+    public double PhaseMoveStepDeg
+    {
+        get => _phaseMoveStepDeg;
+        set => SetProperty(ref _phaseMoveStepDeg, Math.Max(1e-4, value));
+    }
+
+    public double HeadingMoveStepDeg
+    {
+        get => _headingMoveStepDeg;
+        set => SetProperty(ref _headingMoveStepDeg, Math.Max(1e-4, value));
+    }
+
+    public double VInfinityMoveStepKms
+    {
+        get => _vInfinityMoveStepKms;
+        set => SetProperty(ref _vInfinityMoveStepKms, Math.Max(1e-4, value));
+    }
+
     public EditableBody? SelectedCustomBody
     {
         get => _selectedCustomBody;
@@ -336,6 +400,12 @@ public sealed class MainViewModel : ObservableObject
     public int AnimationFrameMax => Math.Max(0, AnimationFrameCount - 1);
 
     public string AnimationSpeedLabel => $"Скорость: {AnimationSpeedMultiplier:F2}x";
+
+    public string AnimationStatusText
+    {
+        get => _animationStatusText;
+        private set => SetProperty(ref _animationStatusText, value);
+    }
 
     public bool IsRunning
     {
@@ -475,7 +545,7 @@ public sealed class MainViewModel : ObservableObject
 
             ApplySimulationOutputs(result, scenario, settings);
             OptimizationText = "Оптимизация еще не запускалась.";
-            StatusText = $"Готово. Точек: {result.SampleCount:n0}";
+            StatusText = BuildRunStatus(result, _lastFlybyMetrics, result.SampleCount);
         }
         catch (OperationCanceledException)
         {
@@ -524,6 +594,10 @@ public sealed class MainViewModel : ObservableObject
             FlybyMetrics? bestMetrics = null;
             double bestScore = double.NegativeInfinity;
             IntegrationSettings settings = CreateIntegrationSettings();
+            int validCount = 0;
+            int collisionCount = 0;
+            int lowFlybyCount = 0;
+            int noSoiCount = 0;
 
             int candidateIndex = 0;
             foreach (double phase in Sweep(opt.PhaseMinDeg, opt.PhaseMaxDeg, opt.PhaseSamples))
@@ -535,34 +609,16 @@ public sealed class MainViewModel : ObservableObject
                         _cts!.Token.ThrowIfCancellationRequested();
                         candidateIndex++;
 
-                        var flyby = new FlybySetup
-                        {
-                            StartDistanceMultiplier = 1.20,
-                            PhaseAngleDeg = phase,
-                            HeadingAngleDeg = heading,
-                            VInfinityKms = vInf,
-                        };
+                        var evaluation = await EvaluateFlybyCandidateAsync(epochUtc, settings, phase, heading, vInf, _cts.Token);
+                        SimulationScenario scenario = evaluation.Scenario;
+                        SimulationResult result = evaluation.Result;
+                        FlybyMetrics metrics = evaluation.Metrics;
+                        double score = evaluation.Score;
 
-                        SimulationScenario scenario = await BuildScenarioAsync(epochUtc, flyby, _cts.Token);
-                        SimulationResult result = await SimulateAsync(scenario, settings, _cts.Token);
-                        FlybyMetrics metrics = BuildFlybyMetrics(result, scenario);
-                        double score = ScoreCandidate(metrics);
+                        OptimizationCandidate candidate = CreateOptimizationCandidate(candidateIndex, phase, heading, vInf, metrics, score);
+                        RegisterOptimizationCandidate(metrics, candidate, top, ref validCount, ref collisionCount, ref lowFlybyCount, ref noSoiCount);
 
-                        var candidate = new OptimizationCandidate
-                        {
-                            Index = candidateIndex,
-                            PhaseAngleDeg = phase,
-                            HeadingAngleDeg = heading,
-                            VInfinityKms = vInf,
-                            DeltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0,
-                            MinJupiterDistanceKm = metrics.MinDistanceToJupiter / 1000.0,
-                            MinSaturnDistanceAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit,
-                            Score = score,
-                        };
-
-                        InsertTopCandidate(top, candidate, 10);
-
-                        if (score > bestScore)
+                        if (metrics.IsFeasibleFlyby && score > bestScore)
                         {
                             bestScore = score;
                             bestResult = result;
@@ -573,17 +629,38 @@ public sealed class MainViewModel : ObservableObject
                             VInfinityKms = vInf;
                         }
 
-                        OptimizationText = BuildOptimizationProgressText(candidateIndex, opt.TotalSamples, top);
+                        OptimizationText = BuildOptimizationProgressText(candidateIndex, opt.TotalSamples, top, validCount, collisionCount, lowFlybyCount, noSoiCount);
                         StatusText = $"Оптимизация: {candidateIndex}/{opt.TotalSamples}";
                     }
                 }
             }
 
+            if (opt.UseLocalRefinement && bestScenario is not null && bestResult is not null && bestMetrics is not null)
+            {
+                (double phase, double heading, double vInf, SimulationScenario scenario, SimulationResult result, FlybyMetrics metrics, double score, int extraEvaluations) =
+                    await RefineBestCandidateAsync(epochUtc, settings, opt, PhaseAngleDeg, HeadingAngleDeg, VInfinityKms, bestScore, _cts!.Token);
+
+                candidateIndex += extraEvaluations;
+                OptimizationCandidate refinedCandidate = CreateOptimizationCandidate(candidateIndex, phase, heading, vInf, metrics, score);
+                RegisterOptimizationCandidate(metrics, refinedCandidate, top, ref validCount, ref collisionCount, ref lowFlybyCount, ref noSoiCount);
+
+                if (metrics.IsFeasibleFlyby && score > bestScore)
+                {
+                    bestScore = score;
+                    bestScenario = scenario;
+                    bestResult = result;
+                    bestMetrics = metrics;
+                    PhaseAngleDeg = phase;
+                    HeadingAngleDeg = heading;
+                    VInfinityKms = vInf;
+                }
+            }
+
             if (bestResult is null || bestScenario is null)
-                throw new InvalidOperationException("Не удалось получить ни одной траектории.");
+                throw new InvalidOperationException("Не удалось получить ни одной допустимой траектории.");
 
             ApplySimulationOutputs(bestResult, bestScenario, settings, bestMetrics);
-            OptimizationText = BuildOptimizationSummary(top, bestMetrics, bestScore);
+            OptimizationText = BuildOptimizationSummary(top, bestMetrics, bestScore, validCount, collisionCount, lowFlybyCount, noSoiCount);
             StatusText = $"Оптимизация завершена. Лучший score = {bestScore:F3}";
         }
         catch (OperationCanceledException)
@@ -651,6 +728,7 @@ public sealed class MainViewModel : ObservableObject
         {
             Name = $"Тело {CustomBodies.Count + 1}",
             Mass = 1e22,
+            RadiusKm = 1000,
             XAu = 2.0 + 0.2 * CustomBodies.Count,
             VxKms = 0,
             VyKms = 15,
@@ -815,7 +893,7 @@ public sealed class MainViewModel : ObservableObject
             scenario.ToBarycentricFrame);
 
         return await Task.Run(
-            () => NBodySimulator.Simulate(system, t0, t1, outDt, settings, cancellationToken),
+            () => NBodySimulator.Simulate(system, t0, t1, outDt, settings, scenario.BodyCollisionRadii, cancellationToken),
             cancellationToken);
     }
 
@@ -843,6 +921,79 @@ public sealed class MainViewModel : ObservableObject
         };
     }
 
+    private async Task<(SimulationScenario Scenario, SimulationResult Result, FlybyMetrics Metrics, double Score)> EvaluateFlybyCandidateAsync(
+        DateTime epochUtc,
+        IntegrationSettings settings,
+        double phaseDeg,
+        double headingDeg,
+        double vInfinityKms,
+        CancellationToken cancellationToken)
+    {
+        var flyby = new FlybySetup
+        {
+            StartDistanceMultiplier = 1.20,
+            PhaseAngleDeg = phaseDeg,
+            HeadingAngleDeg = headingDeg,
+            VInfinityKms = vInfinityKms,
+        };
+
+        SimulationScenario scenario = await BuildScenarioAsync(epochUtc, flyby, cancellationToken);
+        SimulationResult result = await SimulateAsync(scenario, settings, cancellationToken);
+        FlybyMetrics metrics = BuildFlybyMetrics(result, scenario);
+        double score = ScoreCandidate(metrics);
+        return (scenario, result, metrics, score);
+    }
+
+    private static OptimizationCandidate CreateOptimizationCandidate(
+        int index,
+        double phaseDeg,
+        double headingDeg,
+        double vInfinityKms,
+        FlybyMetrics metrics,
+        double score)
+    {
+        return new OptimizationCandidate
+        {
+            Index = index,
+            PhaseAngleDeg = phaseDeg,
+            HeadingAngleDeg = headingDeg,
+            VInfinityKms = vInfinityKms,
+            DeltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0,
+            MinJupiterDistanceKm = metrics.MinDistanceToJupiter / 1000.0,
+            MinSaturnDistanceAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit,
+            Score = score,
+            Status = DescribeFlybyStatus(metrics),
+        };
+    }
+
+    private static void RegisterOptimizationCandidate(
+        FlybyMetrics metrics,
+        OptimizationCandidate candidate,
+        List<OptimizationCandidate> top,
+        ref int validCount,
+        ref int collisionCount,
+        ref int lowFlybyCount,
+        ref int noSoiCount)
+    {
+        if (metrics.HasJupiterCollision)
+        {
+            collisionCount++;
+            return;
+        }
+
+        if (!metrics.HasSphereOfInfluenceCrossing)
+        {
+            noSoiCount++;
+            return;
+        }
+
+        validCount++;
+        if (metrics.HasDangerouslyLowJupiterFlyby)
+            lowFlybyCount++;
+
+        InsertTopCandidate(top, candidate, 10);
+    }
+
     private OptimizationSettings CreateOptimizationSettings()
     {
         return new OptimizationSettings
@@ -856,8 +1007,134 @@ public sealed class MainViewModel : ObservableObject
             VInfinityMinKms = OptVInfinityMinKms,
             VInfinityMaxKms = OptVInfinityMaxKms,
             VInfinitySamples = Math.Max(1, OptVInfinitySamples),
+            UseLocalRefinement = UseLocalRefinement,
+            LocalIterations = LocalIterations,
+            GradientNormTolerance = GradientNormTolerance,
+            PhaseDerivativeStepDeg = PhaseDerivativeStepDeg,
+            HeadingDerivativeStepDeg = HeadingDerivativeStepDeg,
+            VInfinityDerivativeStepKms = VInfinityDerivativeStepKms,
+            PhaseMoveStepDeg = PhaseMoveStepDeg,
+            HeadingMoveStepDeg = HeadingMoveStepDeg,
+            VInfinityMoveStepKms = VInfinityMoveStepKms,
         };
     }
+
+    private async Task<(double PhaseDeg, double HeadingDeg, double VInfinityKms, SimulationScenario Scenario, SimulationResult Result, FlybyMetrics Metrics, double Score, int Evaluations)> RefineBestCandidateAsync(
+        DateTime epochUtc,
+        IntegrationSettings settings,
+        OptimizationSettings opt,
+        double startPhaseDeg,
+        double startHeadingDeg,
+        double startVInfinityKms,
+        double startScore,
+        CancellationToken cancellationToken)
+    {
+        double phase = startPhaseDeg;
+        double heading = startHeadingDeg;
+        double vInf = startVInfinityKms;
+
+        double phaseMove = opt.PhaseMoveStepDeg;
+        double headingMove = opt.HeadingMoveStepDeg;
+        double vInfMove = opt.VInfinityMoveStepKms;
+
+        var current = await EvaluateFlybyCandidateAsync(epochUtc, settings, phase, heading, vInf, cancellationToken);
+        int evaluations = 1;
+        double currentScore = current.Score;
+        if (double.IsFinite(startScore))
+            currentScore = Math.Max(currentScore, startScore);
+
+        for (int iter = 0; iter < opt.LocalIterations; iter++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            double gradPhase = await EstimatePartialDerivativeAsync(epochUtc, settings, phase, heading, vInf, opt.PhaseDerivativeStepDeg, 0, opt, cancellationToken);
+            double gradHeading = await EstimatePartialDerivativeAsync(epochUtc, settings, phase, heading, vInf, opt.HeadingDerivativeStepDeg, 1, opt, cancellationToken);
+            double gradVInf = await EstimatePartialDerivativeAsync(epochUtc, settings, phase, heading, vInf, opt.VInfinityDerivativeStepKms, 2, opt, cancellationToken);
+            evaluations += 6;
+
+            double gradNorm = Math.Sqrt(gradPhase * gradPhase + gradHeading * gradHeading + gradVInf * gradVInf);
+            if (gradNorm < opt.GradientNormTolerance)
+                break;
+
+            double nextPhase = Clamp(phase + Math.Sign(gradPhase) * phaseMove, opt.PhaseMinDeg, opt.PhaseMaxDeg);
+            double nextHeading = Clamp(heading + Math.Sign(gradHeading) * headingMove, opt.HeadingMinDeg, opt.HeadingMaxDeg);
+            double nextVInf = Clamp(vInf + Math.Sign(gradVInf) * vInfMove, opt.VInfinityMinKms, opt.VInfinityMaxKms);
+
+            if (Math.Abs(nextPhase - phase) < 1e-9 &&
+                Math.Abs(nextHeading - heading) < 1e-9 &&
+                Math.Abs(nextVInf - vInf) < 1e-9)
+            {
+                break;
+            }
+
+            var trial = await EvaluateFlybyCandidateAsync(epochUtc, settings, nextPhase, nextHeading, nextVInf, cancellationToken);
+            evaluations++;
+
+            if (trial.Metrics.IsFeasibleFlyby && trial.Score > currentScore)
+            {
+                phase = nextPhase;
+                heading = nextHeading;
+                vInf = nextVInf;
+                current = trial;
+                currentScore = trial.Score;
+            }
+            else
+            {
+                phaseMove *= 0.5;
+                headingMove *= 0.5;
+                vInfMove *= 0.5;
+                if (phaseMove < 1e-3 && headingMove < 1e-3 && vInfMove < 1e-4)
+                    break;
+            }
+        }
+
+        return (phase, heading, vInf, current.Scenario, current.Result, current.Metrics, current.Score, evaluations);
+    }
+
+    private async Task<double> EstimatePartialDerivativeAsync(
+        DateTime epochUtc,
+        IntegrationSettings settings,
+        double phaseDeg,
+        double headingDeg,
+        double vInfinityKms,
+        double step,
+        int parameterIndex,
+        OptimizationSettings opt,
+        CancellationToken cancellationToken)
+    {
+        (double phase, double heading, double vInf) plusPoint = parameterIndex switch
+        {
+            0 => (Clamp(phaseDeg + step, opt.PhaseMinDeg, opt.PhaseMaxDeg), headingDeg, vInfinityKms),
+            1 => (phaseDeg, Clamp(headingDeg + step, opt.HeadingMinDeg, opt.HeadingMaxDeg), vInfinityKms),
+            2 => (phaseDeg, headingDeg, Clamp(vInfinityKms + step, opt.VInfinityMinKms, opt.VInfinityMaxKms)),
+            _ => throw new ArgumentOutOfRangeException(nameof(parameterIndex)),
+        };
+
+        (double phase, double heading, double vInf) minusPoint = parameterIndex switch
+        {
+            0 => (Clamp(phaseDeg - step, opt.PhaseMinDeg, opt.PhaseMaxDeg), headingDeg, vInfinityKms),
+            1 => (phaseDeg, Clamp(headingDeg - step, opt.HeadingMinDeg, opt.HeadingMaxDeg), vInfinityKms),
+            2 => (phaseDeg, headingDeg, Clamp(vInfinityKms - step, opt.VInfinityMinKms, opt.VInfinityMaxKms)),
+            _ => throw new ArgumentOutOfRangeException(nameof(parameterIndex)),
+        };
+
+        double dx = parameterIndex switch
+        {
+            0 => plusPoint.phase - minusPoint.phase,
+            1 => plusPoint.heading - minusPoint.heading,
+            2 => plusPoint.vInf - minusPoint.vInf,
+            _ => 0.0,
+        };
+
+        if (Math.Abs(dx) < 1e-12)
+            return 0.0;
+
+        var plus = await EvaluateFlybyCandidateAsync(epochUtc, settings, plusPoint.phase, plusPoint.heading, plusPoint.vInf, cancellationToken);
+        var minus = await EvaluateFlybyCandidateAsync(epochUtc, settings, minusPoint.phase, minusPoint.heading, minusPoint.vInf, cancellationToken);
+        return (plus.Score - minus.Score) / dx;
+    }
+
+    private static double Clamp(double value, double min, double max) => Math.Max(min, Math.Min(max, value));
 
     private bool TryParseEpoch(out DateTime epochUtc, out string error)
     {
@@ -967,7 +1244,9 @@ public sealed class MainViewModel : ObservableObject
     {
         if (scenario.SpacecraftIndex < 0 || scenario.SpacecraftIndex >= result.BodyCount)
         {
-            MetricsText = "В этом пресете нет космического аппарата.";
+            MetricsText = result.Collision is not null
+                ? $"В этом пресете нет космического аппарата.{Environment.NewLine}Общая коллизия: {DescribeCollision(result.Collision)}"
+                : "В этом пресете нет космического аппарата.";
             return;
         }
 
@@ -980,16 +1259,27 @@ public sealed class MainViewModel : ObservableObject
         sb.AppendLine($"Эпоха начальных данных: {scenario.EpochUtc:yyyy-MM-dd HH:mm} UTC");
         sb.AppendLine($"v0: {v0 / 1000.0:F3} км/с");
         sb.AppendLine($"v1: {v1 / 1000.0:F3} км/с");
+        if (result.Collision is not null)
+            sb.AppendLine($"Общая коллизия: {DescribeCollision(result.Collision)}");
 
         if (flybyMetrics is not null)
         {
+            sb.AppendLine($"Статус пролёта: {DescribeFlybyStatus(flybyMetrics)}");
             sb.AppendLine($"Δv на входе/выходе SOI Юпитера: {flybyMetrics.DeltaVGainHeliocentric / 1000.0:F3} км/с");
             sb.AppendLine($"Мин. расстояние до Юпитера: {flybyMetrics.MinDistanceToJupiter / 1000.0:n0} км");
+            sb.AppendLine($"Высота ближайшего подхода над Юпитером: {Math.Max(0.0, flybyMetrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км");
             sb.AppendLine($"Радиус SOI Юпитера: {flybyMetrics.JupiterSoiRadius / 1000.0:n0} км");
             if (double.IsFinite(flybyMetrics.MinDistanceToSaturn))
                 sb.AppendLine($"Мин. расстояние до Сатурна: {flybyMetrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit:F4} а.е.");
             sb.AppendLine($"|v∞| до Юпитера: {flybyMetrics.InitialJupiterRelativeSpeed / 1000.0:F3} км/с");
             sb.AppendLine($"|v∞| после Юпитера: {flybyMetrics.FinalJupiterRelativeSpeed / 1000.0:F3} км/с");
+            if (flybyMetrics.HasJupiterCollision)
+            {
+                sb.AppendLine("Ограничение нарушено: КА вошёл в радиус Юпитера.");
+                sb.AppendLine($"Кадр столкновения: {flybyMetrics.JupiterCollisionIndex + 1}");
+            }
+            else if (flybyMetrics.HasDangerouslyLowJupiterFlyby)
+                sb.AppendLine("Предупреждение: пролёт ниже рекомендованной границы 2Rj.");
         }
 
         MetricsText = sb.ToString().TrimEnd();
@@ -1016,13 +1306,84 @@ public sealed class MainViewModel : ObservableObject
 
     private static double ScoreCandidate(FlybyMetrics metrics)
     {
+        if (metrics.HasJupiterCollision)
+            return -1e12;
+
         if (!metrics.HasSphereOfInfluenceCrossing)
             return -1e9;
 
         double deltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0;
         double saturnMissAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit;
-        double jupiterPenalty = Math.Max(0.0, (2.0 * AstronomyConstants.JupiterMeanRadius - metrics.MinDistanceToJupiter) / AstronomyConstants.JupiterMeanRadius);
-        return deltaVGainKms - saturnMissAu - 5.0 * jupiterPenalty;
+        double lowFlybyPenalty = Math.Max(0.0, (AstronomyConstants.JupiterLowFlybyDistance - metrics.MinDistanceToJupiter) / AstronomyConstants.JupiterMeanRadius);
+        return deltaVGainKms - saturnMissAu - 5.0 * lowFlybyPenalty;
+    }
+
+    private static string DescribeFlybyStatus(FlybyMetrics metrics)
+    {
+        if (metrics.HasJupiterCollision)
+            return "столкновение с Юпитером";
+        if (!metrics.HasSphereOfInfluenceCrossing)
+            return "нет корректного входа/выхода из SOI";
+        if (metrics.HasDangerouslyLowJupiterFlyby)
+            return "допустимо, но пролёт слишком низкий";
+        return "допустимый пролёт";
+    }
+
+    private static string BuildRunStatus(SimulationResult result, FlybyMetrics? metrics, int sampleCount)
+    {
+        if (result.Collision is not null)
+            return $"Столкновение: {result.Collision.BodyAName} ↔ {result.Collision.BodyBName}. Точек: {sampleCount:n0}";
+
+        if (metrics is null)
+            return $"Готово. Точек: {sampleCount:n0}";
+
+        if (metrics.HasJupiterCollision)
+            return $"Недопустимая траектория: столкновение с Юпитером. Точек: {sampleCount:n0}";
+        if (!metrics.HasSphereOfInfluenceCrossing)
+            return $"Манёвр не состоялся: нет корректного пересечения SOI. Точек: {sampleCount:n0}";
+        if (metrics.HasDangerouslyLowJupiterFlyby)
+            return $"Низкий пролёт у Юпитера. Точек: {sampleCount:n0}";
+
+        return $"Готово. Точек: {sampleCount:n0}";
+    }
+
+    private static string BuildAnimationStatusText(SimulationResult? result, FlybyMetrics? metrics)
+    {
+        if (result?.Collision is not null)
+        {
+            var sbCollision = new StringBuilder();
+            sbCollision.AppendLine($"Статус: {DescribeCollision(result.Collision)}.");
+            sbCollision.AppendLine($"Момент: t = {result.Collision.Time / 86400.0:F3} суток.");
+            sbCollision.AppendLine($"Дистанция: {result.Collision.Distance / 1000.0:n0} км при пороге {result.Collision.ThresholdDistance / 1000.0:n0} км.");
+            sbCollision.AppendLine("Симуляция остановлена в момент первого пересечения радиусов тел.");
+            return sbCollision.ToString().TrimEnd();
+        }
+
+        if (metrics is null)
+            return "Для текущей сцены нет отдельного статуса пролёта.";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Статус: {DescribeFlybyStatus(metrics)}.");
+        sb.AppendLine($"Минимальная дистанция до Юпитера: {metrics.MinDistanceToJupiter / 1000.0:n0} км.");
+        sb.AppendLine($"Высота ближайшего подхода: {Math.Max(0.0, metrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км.");
+        if (metrics.HasJupiterCollision)
+        {
+            sb.AppendLine("Этот вариант недопустим: аппарат пересёк радиус Юпитера.");
+            sb.AppendLine($"Анимация обрезана по кадру столкновения: {metrics.JupiterCollisionIndex + 1}.");
+        }
+        else if (metrics.HasDangerouslyLowJupiterFlyby)
+            sb.AppendLine("Это предупреждение: траектория прошла ниже рекомендованной границы 2Rj.");
+        else if (!metrics.HasSphereOfInfluenceCrossing)
+            sb.AppendLine("Гравитационный манёвр не сформировался корректно.");
+        else
+            sb.AppendLine("Траектория проходит проверку на отсутствие столкновения.");
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string DescribeCollision(CollisionEvent collision)
+    {
+        return $"{collision.BodyAName} ↔ {collision.BodyBName}";
     }
 
     private static IEnumerable<double> Sweep(double min, double max, int samples)
@@ -1046,10 +1407,11 @@ public sealed class MainViewModel : ObservableObject
             top.RemoveRange(capacity, top.Count - capacity);
     }
 
-    private static string BuildOptimizationProgressText(int current, int total, IReadOnlyList<OptimizationCandidate> top)
+    private static string BuildOptimizationProgressText(int current, int total, IReadOnlyList<OptimizationCandidate> top, int validCount, int collisionCount, int lowFlybyCount, int noSoiCount)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Проверено траекторий: {current} / {total}");
+        sb.AppendLine($"Допустимых: {validCount}, столкновений: {collisionCount}, низких пролётов: {lowFlybyCount}, без входа в SOI: {noSoiCount}");
         if (top.Count > 0)
         {
             sb.AppendLine();
@@ -1060,15 +1422,21 @@ public sealed class MainViewModel : ObservableObject
         return sb.ToString().TrimEnd();
     }
 
-    private static string BuildOptimizationSummary(IReadOnlyList<OptimizationCandidate> top, FlybyMetrics? bestMetrics, double bestScore)
+    private static string BuildOptimizationSummary(IReadOnlyList<OptimizationCandidate> top, FlybyMetrics? bestMetrics, double bestScore, int validCount, int collisionCount, int lowFlybyCount, int noSoiCount)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Лучший score: {bestScore:F3}");
+        sb.AppendLine($"Допустимых траекторий: {validCount}");
+        sb.AppendLine($"Столкновений с Юпитером: {collisionCount}");
+        sb.AppendLine($"Низких пролётов (< 2Rj): {lowFlybyCount}");
+        sb.AppendLine($"Без корректного пересечения SOI: {noSoiCount}");
         if (bestMetrics is not null)
         {
+            sb.AppendLine($"Статус лучшего кандидата: {DescribeFlybyStatus(bestMetrics)}");
             sb.AppendLine($"Δv на SOI Юпитера: {bestMetrics.DeltaVGainHeliocentric / 1000.0:F3} км/с");
             sb.AppendLine($"Мин. дистанция до Сатурна: {bestMetrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit:F4} а.е.");
             sb.AppendLine($"Мин. дистанция до Юпитера: {bestMetrics.MinDistanceToJupiter / 1000.0:n0} км");
+            sb.AppendLine($"Высота ближайшего подхода: {Math.Max(0.0, bestMetrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км");
         }
 
         if (top.Count > 0)
@@ -1208,14 +1576,27 @@ public sealed class MainViewModel : ObservableObject
         }
         sb.AppendLine();
 
+        sb.AppendLine("## Ограничения на траекторию");
+        sb.AppendLine($"Столкновение с Юпитером: d_min <= Rj, где Rj = {AstronomyConstants.JupiterMeanRadius:R} м.");
+        sb.AppendLine($"Низкий пролёт: d_min < 2Rj = {AstronomyConstants.JupiterLowFlybyDistance:R} м.");
+        sb.AppendLine("Для оптимизации недопустимы варианты без корректного входа/выхода из SOI Юпитера и варианты со столкновением.");
+        sb.AppendLine("Для общей системы тел используется критерий столкновения d_ij <= R_i + R_j.");
+        sb.AppendLine();
+
         sb.AppendLine("## Результаты");
+        if (result.Collision is not null)
+            sb.AppendLine($"Общая коллизия: {DescribeCollision(result.Collision)} на t = {result.Collision.Time:R} c.");
         if (scenario.SpacecraftIndex >= 0 && flybyMetrics is not null)
         {
+            sb.AppendLine($"Статус пролёта: {DescribeFlybyStatus(flybyMetrics)}");
             sb.AppendLine($"Δv на входе/выходе SOI Юпитера: {flybyMetrics.DeltaVGainHeliocentric / 1000.0:F6} км/с");
             sb.AppendLine($"Мин. расстояние до Юпитера: {flybyMetrics.MinDistanceToJupiter / 1000.0:n0} км");
+            sb.AppendLine($"Высота ближайшего подхода над Юпитером: {Math.Max(0.0, flybyMetrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км");
             sb.AppendLine($"Мин. расстояние до Сатурна: {flybyMetrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit:F6} а.е.");
             sb.AppendLine($"|v∞| до Юпитера: {flybyMetrics.InitialJupiterRelativeSpeed / 1000.0:F6} км/с");
             sb.AppendLine($"|v∞| после Юпитера: {flybyMetrics.FinalJupiterRelativeSpeed / 1000.0:F6} км/с");
+            if (flybyMetrics.HasJupiterCollision)
+                sb.AppendLine($"Кадр столкновения: {flybyMetrics.JupiterCollisionIndex + 1}");
         }
         else
         {
@@ -1231,6 +1612,7 @@ public sealed class MainViewModel : ObservableObject
     private SimulationScenario CreateCustomScenario(DateTime epochUtc)
     {
         var bodies = CustomBodies.Select(static body => body.ToBodyState()).ToList();
+        var collisionRadii = CustomBodies.Select(static body => body.ToCollisionRadiusMeters()).ToList();
         if (bodies.Count == 0)
             throw new InvalidOperationException("В песочнице нет тел.");
 
@@ -1246,6 +1628,7 @@ public sealed class MainViewModel : ObservableObject
         {
             Name = "Песочница",
             Bodies = bodies,
+            BodyCollisionRadii = collisionRadii,
             SunIndex = sunIndex,
             JupiterIndex = jupiterIndex,
             SaturnIndex = saturnIndex,
@@ -1288,6 +1671,10 @@ public sealed class MainViewModel : ObservableObject
 
     private void UpdateAnimationScene(SimulationResult result, SimulationScenario scenario)
     {
+        int frameLimit = result.SampleCount;
+        if (_lastFlybyMetrics?.HasJupiterCollision == true && _lastFlybyMetrics.JupiterCollisionIndex >= 0)
+            frameLimit = Math.Min(result.SampleCount, _lastFlybyMetrics.JupiterCollisionIndex + 1);
+
         Brush[] brushes = result.BodyNames
             .Select(PickBrush)
             .Select(static brush =>
@@ -1300,12 +1687,13 @@ public sealed class MainViewModel : ObservableObject
 
         AnimationScene = new AnimationSceneData
         {
-            Positions = result.Positions,
+            Positions = result.Positions.Take(frameLimit).ToArray(),
             BodyNames = result.BodyNames,
             BodyBrushes = brushes,
             CenterBodyIndex = Math.Clamp(scenario.SunIndex, 0, result.BodyCount - 1),
         };
-        AnimationFrameCount = result.SampleCount;
+        AnimationStatusText = BuildAnimationStatusText(result, _lastFlybyMetrics);
+        AnimationFrameCount = frameLimit;
         AnimationFrameIndex = 0;
         ResetAnimation();
     }
@@ -1324,6 +1712,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 Name = "Солнце",
                 Mass = AstronomyConstants.SolarMass,
+                RadiusKm = AstronomyConstants.SolarRadius / 1000.0,
                 XAu = 0,
                 YAu = 0,
                 ZAu = 0,
@@ -1335,6 +1724,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 Name = "Юпитер",
                 Mass = AstronomyConstants.JupiterMass,
+                RadiusKm = AstronomyConstants.JupiterMeanRadius / 1000.0,
                 XAu = AstronomyConstants.JupiterSemiMajorAxis / AstronomyConstants.AstronomicalUnit,
                 YAu = 0,
                 ZAu = 0,
@@ -1346,6 +1736,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 Name = "Сатурн",
                 Mass = AstronomyConstants.SaturnMass,
+                RadiusKm = AstronomyConstants.SaturnMeanRadius / 1000.0,
                 XAu = AstronomyConstants.SaturnSemiMajorAxis / AstronomyConstants.AstronomicalUnit,
                 YAu = 0,
                 ZAu = 0,
@@ -1357,6 +1748,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 Name = "КА",
                 Mass = 0,
+                RadiusKm = 0,
                 XAu = AstronomyConstants.JupiterSemiMajorAxis / AstronomyConstants.AstronomicalUnit - 0.18,
                 YAu = -0.06,
                 ZAu = 0,
@@ -1373,9 +1765,15 @@ public sealed class MainViewModel : ObservableObject
         sb.AppendLine("Песочница рассчитана.");
         sb.AppendLine($"Тел в системе: {scenario.Bodies.Count}");
         sb.AppendLine($"Точек: {result.SampleCount:n0}");
+        if (result.Collision is not null)
+            sb.AppendLine($"Столкновение: {result.Collision.BodyAName} ↔ {result.Collision.BodyBName} на t = {result.Collision.Time / 86400.0:F3} суток");
         sb.AppendLine("Список тел:");
-        foreach (BodyState body in scenario.Bodies)
-            sb.AppendLine($"- {body.Name}, m = {body.Mass:E3} кг");
+        for (int i = 0; i < scenario.Bodies.Count; i++)
+        {
+            BodyState body = scenario.Bodies[i];
+            double radiusKm = i < scenario.BodyCollisionRadii.Count ? scenario.BodyCollisionRadii[i] / 1000.0 : 0.0;
+            sb.AppendLine($"- {body.Name}, m = {body.Mass:E3} кг, R = {radiusKm:n0} км");
+        }
         return sb.ToString().TrimEnd();
     }
 
@@ -1389,6 +1787,7 @@ public sealed class MainViewModel : ObservableObject
         ReportText = "Запустите симуляцию, и здесь появится отчет.";
         OptimizationText = "Оптимизация еще не запускалась.";
         SandboxText = "Песочница еще не запускалась.";
+        AnimationStatusText = "Запустите расчёт, чтобы увидеть статус пролёта.";
         ResetAnimation();
         AnimationScene = null;
         AnimationFrameCount = 0;
@@ -1405,6 +1804,7 @@ public sealed class MainViewModel : ObservableObject
         StatusText = "Отменено.";
         MetricsText = "Отменено.";
         ReportText = "Отменено.";
+        AnimationStatusText = "Расчёт отменён.";
         HasResults = false;
     }
 
@@ -1414,6 +1814,7 @@ public sealed class MainViewModel : ObservableObject
         StatusText = "Ошибка.";
         MetricsText = ex.Message;
         ReportText = ex.Message;
+        AnimationStatusText = ex.Message;
         HasResults = false;
     }
 }

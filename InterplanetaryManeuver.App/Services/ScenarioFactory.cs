@@ -33,6 +33,13 @@ public sealed class ScenarioFactory
         var saturn = CreateBody(saturnState, AstronomyConstants.SaturnMass);
 
         var bodies = new List<BodyState> { sun, jupiter, saturn };
+        var collisionRadii = new List<double>
+        {
+            AstronomyConstants.SolarRadius,
+            AstronomyConstants.JupiterMeanRadius,
+            AstronomyConstants.SaturnMeanRadius,
+        };
+
         int spacecraftIndex = -1;
 
         if (kind == SimulationPresetKind.JupiterFlyby)
@@ -40,6 +47,7 @@ public sealed class ScenarioFactory
             FlybySetup setup = flybySetup ?? new FlybySetup();
             BodyState spacecraft = CreateSpacecraft(jupiter, sun, setup, jupiterSoiRadius);
             bodies.Add(spacecraft);
+            collisionRadii.Add(0.0);
             spacecraftIndex = bodies.Count - 1;
         }
 
@@ -49,6 +57,7 @@ public sealed class ScenarioFactory
                 ? "Гравиманевр у Юпитера"
                 : "Солнце + Юпитер + Сатурн",
             Bodies = bodies,
+            BodyCollisionRadii = collisionRadii,
             SunIndex = 0,
             JupiterIndex = 1,
             SaturnIndex = 2,
@@ -75,9 +84,7 @@ public sealed class ScenarioFactory
         Vector3d orbitalDirection = (jupiter.Velocity - sun.Velocity).Normalized();
         Vector3d normal = Vector3d.Cross(sunToJupiter, orbitalDirection).Normalized();
         if (normal.Length() < 1e-12)
-        {
             normal = new Vector3d(0, 0, 1);
-        }
 
         Vector3d tangent = Vector3d.Cross(normal, sunToJupiter).Normalized();
         double phase = DegreesToRadians(setup.PhaseAngleDeg);
@@ -101,4 +108,3 @@ public sealed class ScenarioFactory
 
     private static double DegreesToRadians(double value) => Math.PI * value / 180.0;
 }
-

@@ -10,6 +10,7 @@ public sealed class SimulationScenario
 {
     public required string Name { get; init; }
     public required IReadOnlyList<PhysicsSim.Core.BodyState> Bodies { get; init; }
+    public required IReadOnlyList<double> BodyCollisionRadii { get; init; }
     public required int SunIndex { get; init; }
     public required int JupiterIndex { get; init; }
     public required int SaturnIndex { get; init; }

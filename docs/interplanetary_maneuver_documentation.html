@@ -295,7 +295,11 @@ facMax = 5.0
 </code></pre>
 <hr>
 <h2>9. Целевая функция оптимизации</h2>
-<p>Оптимизация в приложении сейчас реализована как <strong>полный сеточный перебор</strong> (<code>grid search</code>).</p>
+<p>Оптимизация в приложении реализована в два этапа:</p>
+<ol>
+<li>полный сеточный перебор (<code>grid search</code>);</li>
+<li>локальная доводка лучшего кандидата по центральным разностям.</li>
+</ol>
 <p>Параметры перебора:</p>
 <ul>
 <li>фазовый угол <code>phi</code>;</li>
@@ -305,23 +309,45 @@ facMax = 5.0
 <p>Для каждой комбинации выполняется полная симуляция и вычисляется score.</p>
 <h3>9.1. Формула score</h3>
 <p>В коде (<code>MainViewModel.ScoreCandidate</code>) используется функция</p>
-<pre><code class="language-text">score = Δv_gain_kms - saturnMiss_AU - 5 * jupiterPenalty
+<pre><code class="language-text">score = Δv_gain_kms - saturnMiss_AU - 5 * lowFlybyPenalty
 </code></pre>
 <p>где</p>
 <pre><code class="language-text">Δv_gain_kms = Δv_gain / 1000
 saturnMiss_AU = r_S,min / AU
-jupiterPenalty = max(0, (2*R_J - r_J,min) / R_J)
+lowFlybyPenalty = max(0, (2*R_J - r_J,min) / R_J)
 </code></pre>
 <p>Смысл членов функции:</p>
 <ul>
 <li><code>Δv_gain_kms</code> — поощряет прирост скорости;</li>
 <li><code>saturnMiss_AU</code> — штрафует за большой промах мимо Сатурна;</li>
-<li><code>jupiterPenalty</code> — штрафует за слишком опасное сближение с Юпитером.</li>
+<li><code>lowFlybyPenalty</code> — штрафует за слишком опасное сближение с Юпитером.</li>
 </ul>
 <h3>9.2. Особый случай</h3>
 <p>Если аппарат вообще не пересёк сферу влияния Юпитера, то кандидату сразу назначается большой штраф:</p>
 <pre><code class="language-text">score = -1e9
 </code></pre>
+<p>Если аппарат столкнулся с Юпитером, то кандидату назначается ещё более жёсткий штраф:</p>
+<pre><code class="language-text">score = -1e12
+</code></pre>
+<h3>9.3. Ограничения и ранняя остановка</h3>
+<p>В текущей версии модели используются ограничения:</p>
+<ul>
+<li>столкновение с Юпитером: <code>r_J,min &lt;= R_J</code>;</li>
+<li>опасно низкий пролёт: <code>r_J,min &lt; 2R_J</code>;</li>
+<li>общая коллизия тел в песочнице: <code>d_ij &lt;= R_i + R_j</code>.</li>
+</ul>
+<p>При общей коллизии интегрирование останавливается в момент первого пересечения радиусов тел.</p>
+<h3>9.4. Локальная доводка</h3>
+<p>После сеточного перебора лучший допустимый кандидат можно доработать локально.</p>
+<p>Частные производные оцениваются центральными разностями:</p>
+<pre><code class="language-text">dScore/dx_i ~= (Score(x_i + h_i) - Score(x_i - h_i)) / (2h_i)
+</code></pre>
+<p>Для разных параметров используются разные шаги:</p>
+<ul>
+<li>для фазового угла;</li>
+<li>для угла входа;</li>
+<li>для гиперболической скорости.</li>
+</ul>
 <hr>
 <h2>10. Графики и анимация</h2>
 <h3>10.1. Что строится</h3>
@@ -355,6 +381,7 @@ jupiterPenalty = max(0, (2*R_J - r_J,min) / R_J)
 <ul>
 <li>имя тела;</li>
 <li>массу;</li>
+<li>радиус тела;</li>
 <li>координаты <code>X, Y, Z</code> в <code>а.е.</code>;</li>
 <li>скорости <code>Vx, Vy, Vz</code> в <code>км/с</code>.</li>
 </ul>
@@ -371,6 +398,8 @@ vx_ms = Vx_kms * 1000
 BodyNames   : string[]
 Positions   : Vector3d[][]
 Velocities  : Vector3d[][]
+Collision   : CollisionEvent?
+TerminationReason : string?
 </code></pre>
 <p>Интерпретация:</p>
 <pre><code class="language-text">Positions[sample][body]
@@ -467,17 +496,20 @@ Velocities[sample][body]
 <h3>15.3. Целевая функция оптимизации</h3>
 <pre><code class="language-csharp">private static double ScoreCandidate(FlybyMetrics metrics)
 {
+    if (metrics.HasJupiterCollision)
+        return -1e12;
+
     if (!metrics.HasSphereOfInfluenceCrossing)
         return -1e9;
 
     double deltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0;
     double saturnMissAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit;
-    double jupiterPenalty = Math.Max(
+    double lowFlybyPenalty = Math.Max(
         0.0,
         (2.0 * AstronomyConstants.JupiterMeanRadius - metrics.MinDistanceToJupiter)
         / AstronomyConstants.JupiterMeanRadius);
 
-    return deltaVGainKms - saturnMissAu - 5.0 * jupiterPenalty;
+    return deltaVGainKms - saturnMissAu - 5.0 * lowFlybyPenalty;
 }
 </code></pre>
 <h3>15.4. Прирост скорости на SOI Юпитера</h3>
@@ -488,7 +520,7 @@ Velocities[sample][body]
 <h2>16. Как это можно формулировать на защите</h2>
 <p>Короткая строгая формулировка:</p>
 <blockquote>
-<p>В программе реализована ньютоновская N-body модель движения тел Солнечной системы. Система интегрируется адаптивным методом Dormand–Prince RK 5(4) с контролем локальной ошибки. Начальные состояния Солнца, Юпитера и Сатурна загружаются через NASA/JPL Horizons API. Космический аппарат задаётся параметрами входа в сферу влияния Юпитера. После моделирования вычисляется прирост гелиоцентрической скорости аппарата на входе и выходе из SOI Юпитера и выполняется оптимизация по сетке параметров сближения.</p>
+<p>В программе реализована ньютоновская N-body модель движения тел Солнечной системы. Система интегрируется адаптивным методом Dormand–Prince RK 5(4) с контролем локальной ошибки и ранней остановкой при столкновении тел. Начальные состояния Солнца, Юпитера и Сатурна загружаются через NASA/JPL Horizons API. Космический аппарат задаётся параметрами входа в сферу влияния Юпитера. После моделирования вычисляется прирост гелиоцентрической скорости аппарата на входе и выходе из SOI Юпитера, затем выполняется оптимизация: сначала сеточный перебор, затем локальная доводка лучшего кандидата по центральным разностям.</p>
 </blockquote>
 <hr>
 <h2>17. Ограничения и перспективы развития</h2>
@@ -496,8 +528,8 @@ Velocities[sample][body]
 <ul>
 <li>пока не используется SPICE offline kernels;</li>
 <li>нет высокоточного учёта эллиптических элементов аппарата как отдельной задачи Ламберта;</li>
-<li>нет непрерывного оптимизатора типа Nelder–Mead / CMA-ES / differential evolution;</li>
-<li>нет учёта ограничений на перегрузку и минимальную высоту пролёта кроме штрафа в score.</li>
+<li>локальная доводка пока использует простую покоординатную схему, а не полноценный нелинейный оптимизатор;</li>
+<li>нет учёта ограничений на перегрузку, тепловой поток и реальные атмосферные эффекты.</li>
 </ul>
 <p>Что можно назвать развитием:</p>
 <ul>
@@ -544,6 +576,82 @@ InterplanetaryManeuver.App/Controls/Plot2DControl.cs
 <h2>20. Репозиторий проекта</h2>
 <p>Актуальная версия исходного кода проекта размещена в GitHub-репозитории:</p>
 <p><code>https://github.com/VladislavGubarev/InterplanetaryManeuver</code></p>
+<hr>
+<h2>21. Упрощённая аналитическая модель гравиманёвра</h2>
+<p>Эта модель не заменяет численную N-body симуляцию, а используется как понятная идеализация и как проверка порядка величин.</p>
+<h3>21.1. Обозначения</h3>
+<ul>
+<li><code>M</code> — масса Юпитера;</li>
+<li><code>G</code> — гравитационная постоянная;</li>
+<li><code>R</code> — минимально допустимый радиус пролёта, например верхняя граница атмосферы;</li>
+<li><code>r0</code> — начальное расстояние от центра Юпитера до аппарата;</li>
+<li><code>v_p</code> — скорость Юпитера в гелиоцентрической системе;</li>
+<li><code>v_inf</code> — гиперболическая скорость аппарата на бесконечности в системе Юпитера;</li>
+<li><code>r_p</code> — перицентр траектории;</li>
+<li><code>delta</code> — угол поворота асимптот гиперболы.</li>
+</ul>
+<h3>21.2. Энергия в системе Юпитера</h3>
+<p>Для движения аппарата в поле Юпитера:</p>
+<pre><code class="language-text">v^2 / 2 - GM / r = v_inf^2 / 2
+</code></pre>
+<p>Для предельного идеализированного параболического случая:</p>
+<pre><code class="language-text">v_inf = 0
+</code></pre>
+<p>Тогда на расстоянии <code>r0</code> получаем:</p>
+<pre><code class="language-text">v0 = sqrt(2GM / r0)
+</code></pre>
+<h3>21.3. Ограничение на допустимый пролёт</h3>
+<p>Траектория допустима только при условии:</p>
+<pre><code class="language-text">r_p &gt;= R
+</code></pre>
+<p>Если:</p>
+<pre><code class="language-text">r_p &lt; R
+</code></pre>
+<p>то решение считается недопустимым, так как аппарат входит в атмосферу или сталкивается с планетой.</p>
+<h3>21.4. Геометрия поворота траектории</h3>
+<p>Смысл гравиманёвра в этой модели в том, что в системе Юпитера вектор скорости аппарата поворачивается, а его модуль на бесконечности сохраняется.</p>
+<p>В упрощённой геометрической записи используются соотношения:</p>
+<pre><code class="language-text">angle(v0, v_p) = pi - arcsin(sqrt(R / r0))
+</code></pre>
+<pre><code class="language-text">angle(r0, v_p) = 2 * arcsin(sqrt(R / r0))
+</code></pre>
+<p>Из этих формул видно, что параметр <code>R</code> влияет на угол поворота траектории: чем больше допустимый радиус пролёта, тем шире траектория и тем слабее гравитационный разворот.</p>
+<h3>21.5. Переход в гелиоцентрическую систему</h3>
+<p>Гелиоцентрическая скорость аппарата выражается как:</p>
+<pre><code class="language-text">v_hel = v_rel + v_p
+</code></pre>
+<p>До и после манёвра:</p>
+<pre><code class="language-text">v_hel_in = v_inf_in + v_p
+</code></pre>
+<pre><code class="language-text">v_hel_out = v_inf_out + v_p
+</code></pre>
+<p>При идеальном gravity assist:</p>
+<pre><code class="language-text">|v_inf_in| = |v_inf_out| = v_inf
+</code></pre>
+<p>То есть меняется в основном направление вектора скорости, а не его модуль в системе Юпитера.</p>
+<h3>21.6. Целевая функция</h3>
+<p>В упрощённой аналитической модели естественно выбирать в качестве score прирост гелиоцентрической скорости:</p>
+<pre><code class="language-text">score = DeltaV = |v_hel_out| - |v_hel_in|
+</code></pre>
+<p>Если условие допустимости нарушено:</p>
+<pre><code class="language-text">r_p &lt; R
+</code></pre>
+<p>то:</p>
+<pre><code class="language-text">score = -infinity
+</code></pre>
+<p>или решение просто исключается из оптимизации.</p>
+<h3>21.7. Физический смысл результата</h3>
+<ul>
+<li>в системе Юпитера сохраняется модуль гиперболической скорости на бесконечности;</li>
+<li>полезный выигрыш появляется из-за поворота направления вектора скорости;</li>
+<li>чем ближе аппарат проходит к Юпитеру, тем больше угол поворота;</li>
+<li>чем больше <code>R</code>, тем слабее поворот и тем меньше итоговый прирост скорости.</li>
+</ul>
+<h3>21.8. Предельный идеальный случай</h3>
+<p>В предельно выгодной геометрии прирост скорости может стремиться к величине порядка:</p>
+<pre><code class="language-text">DeltaV_max ~ 2 * v_p
+</code></pre>
+<p>Это следует понимать как верхнюю оценку для идеализированного случая, а не как обязательный результат реальной численной модели.</p>
 
   </main>
 </body>

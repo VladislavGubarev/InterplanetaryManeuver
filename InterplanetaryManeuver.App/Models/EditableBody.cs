@@ -13,6 +13,7 @@ public sealed class EditableBody : ObservableObject
     private double _vxKms;
     private double _vyKms;
     private double _vzKms;
+    private double _radiusKm;
 
     public string Name
     {
@@ -62,6 +63,12 @@ public sealed class EditableBody : ObservableObject
         set => SetProperty(ref _vzKms, value);
     }
 
+    public double RadiusKm
+    {
+        get => _radiusKm;
+        set => SetProperty(ref _radiusKm, value);
+    }
+
     public BodyState ToBodyState()
     {
         return new BodyState(
@@ -77,6 +84,8 @@ public sealed class EditableBody : ObservableObject
                 VzKms * 1000.0));
     }
 
+    public double ToCollisionRadiusMeters() => Math.Max(0.0, RadiusKm) * 1000.0;
+
     public EditableBody Clone()
     {
         return new EditableBody
@@ -89,6 +98,7 @@ public sealed class EditableBody : ObservableObject
             VxKms = VxKms,
             VyKms = VyKms,
             VzKms = VzKms,
+            RadiusKm = RadiusKm,
         };
     }
 }
