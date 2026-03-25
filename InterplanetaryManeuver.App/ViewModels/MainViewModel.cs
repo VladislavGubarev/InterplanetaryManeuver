@@ -598,6 +598,7 @@ public sealed class MainViewModel : ObservableObject
             int collisionCount = 0;
             int lowFlybyCount = 0;
             int noSoiCount = 0;
+            int noReturnCount = 0;
 
             int candidateIndex = 0;
             foreach (double phase in Sweep(opt.PhaseMinDeg, opt.PhaseMaxDeg, opt.PhaseSamples))
@@ -616,7 +617,7 @@ public sealed class MainViewModel : ObservableObject
                         double score = evaluation.Score;
 
                         OptimizationCandidate candidate = CreateOptimizationCandidate(candidateIndex, phase, heading, vInf, metrics, score);
-                        RegisterOptimizationCandidate(metrics, candidate, top, ref validCount, ref collisionCount, ref lowFlybyCount, ref noSoiCount);
+                        RegisterOptimizationCandidate(metrics, candidate, top, ref validCount, ref collisionCount, ref lowFlybyCount, ref noSoiCount, ref noReturnCount);
 
                         if (metrics.IsFeasibleFlyby && score > bestScore)
                         {
@@ -629,7 +630,7 @@ public sealed class MainViewModel : ObservableObject
                             VInfinityKms = vInf;
                         }
 
-                        OptimizationText = BuildOptimizationProgressText(candidateIndex, opt.TotalSamples, top, validCount, collisionCount, lowFlybyCount, noSoiCount);
+                        OptimizationText = BuildOptimizationProgressText(candidateIndex, opt.TotalSamples, top, validCount, collisionCount, lowFlybyCount, noSoiCount, noReturnCount);
                         StatusText = $"Оптимизация: {candidateIndex}/{opt.TotalSamples}";
                     }
                 }
@@ -642,7 +643,7 @@ public sealed class MainViewModel : ObservableObject
 
                 candidateIndex += extraEvaluations;
                 OptimizationCandidate refinedCandidate = CreateOptimizationCandidate(candidateIndex, phase, heading, vInf, metrics, score);
-                RegisterOptimizationCandidate(metrics, refinedCandidate, top, ref validCount, ref collisionCount, ref lowFlybyCount, ref noSoiCount);
+                RegisterOptimizationCandidate(metrics, refinedCandidate, top, ref validCount, ref collisionCount, ref lowFlybyCount, ref noSoiCount, ref noReturnCount);
 
                 if (metrics.IsFeasibleFlyby && score > bestScore)
                 {
@@ -660,7 +661,7 @@ public sealed class MainViewModel : ObservableObject
                 throw new InvalidOperationException("Не удалось получить ни одной допустимой траектории.");
 
             ApplySimulationOutputs(bestResult, bestScenario, settings, bestMetrics);
-            OptimizationText = BuildOptimizationSummary(top, bestMetrics, bestScore, validCount, collisionCount, lowFlybyCount, noSoiCount);
+            OptimizationText = BuildOptimizationSummary(top, bestMetrics, bestScore, validCount, collisionCount, lowFlybyCount, noSoiCount, noReturnCount);
             StatusText = $"Оптимизация завершена. Лучший score = {bestScore:F3}";
         }
         catch (OperationCanceledException)
@@ -892,8 +893,37 @@ public sealed class MainViewModel : ObservableObject
             scenario.Bodies,
             scenario.ToBarycentricFrame);
 
+        StopCondition? stopCondition = null;
+        if (scenario.SpacecraftIndex >= 0 && scenario.JupiterIndex >= 0)
+        {
+            double startDistance = (scenario.Bodies[scenario.SpacecraftIndex].Position - scenario.Bodies[scenario.JupiterIndex].Position).Length();
+            double minDistanceSeen = startDistance;
+            bool outbound = false;
+            double tolerance = Math.Max(1.0, startDistance * 1e-6);
+
+            stopCondition = (_, state) =>
+            {
+                int scBase = scenario.SpacecraftIndex * 6;
+                int jBase = scenario.JupiterIndex * 6;
+                double dx = state[scBase + 0] - state[jBase + 0];
+                double dy = state[scBase + 1] - state[jBase + 1];
+                double dz = state[scBase + 2] - state[jBase + 2];
+                double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+
+                if (distance < minDistanceSeen - tolerance)
+                    minDistanceSeen = distance;
+                else if (distance > minDistanceSeen + tolerance)
+                    outbound = true;
+
+                if (outbound && distance >= startDistance - tolerance)
+                    return "Возврат на исходное расстояние от Юпитера";
+
+                return null;
+            };
+        }
+
         return await Task.Run(
-            () => NBodySimulator.Simulate(system, t0, t1, outDt, settings, scenario.BodyCollisionRadii, cancellationToken),
+            () => NBodySimulator.Simulate(system, t0, t1, outDt, settings, scenario.BodyCollisionRadii, stopCondition, cancellationToken),
             cancellationToken);
     }
 
@@ -973,11 +1003,18 @@ public sealed class MainViewModel : ObservableObject
         ref int validCount,
         ref int collisionCount,
         ref int lowFlybyCount,
-        ref int noSoiCount)
+        ref int noSoiCount,
+        ref int noReturnCount)
     {
         if (metrics.HasJupiterCollision)
         {
             collisionCount++;
+            return;
+        }
+
+        if (!metrics.HasReturnToInitialDistance)
+        {
+            noReturnCount++;
             return;
         }
 
@@ -1265,7 +1302,8 @@ public sealed class MainViewModel : ObservableObject
         if (flybyMetrics is not null)
         {
             sb.AppendLine($"Статус пролёта: {DescribeFlybyStatus(flybyMetrics)}");
-            sb.AppendLine($"Δv на входе/выходе SOI Юпитера: {flybyMetrics.DeltaVGainHeliocentric / 1000.0:F3} км/с");
+            sb.AppendLine($"Начальное расстояние до Юпитера r0: {flybyMetrics.InitialDistanceToJupiter / 1000.0:n0} км");
+            sb.AppendLine($"Δv при возврате на то же расстояние r0: {flybyMetrics.DeltaVGainHeliocentric / 1000.0:F3} км/с");
             sb.AppendLine($"Мин. расстояние до Юпитера: {flybyMetrics.MinDistanceToJupiter / 1000.0:n0} км");
             sb.AppendLine($"Высота ближайшего подхода над Юпитером: {Math.Max(0.0, flybyMetrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км");
             sb.AppendLine($"Радиус SOI Юпитера: {flybyMetrics.JupiterSoiRadius / 1000.0:n0} км");
@@ -1278,6 +1316,8 @@ public sealed class MainViewModel : ObservableObject
                 sb.AppendLine("Ограничение нарушено: КА вошёл в радиус Юпитера.");
                 sb.AppendLine($"Кадр столкновения: {flybyMetrics.JupiterCollisionIndex + 1}");
             }
+            else if (!flybyMetrics.HasReturnToInitialDistance)
+                sb.AppendLine("Ограничение нарушено: после облёта аппарат не вернулся на исходное удаление r0.");
             else if (flybyMetrics.HasDangerouslyLowJupiterFlyby)
                 sb.AppendLine("Предупреждение: пролёт ниже рекомендованной границы 2Rj.");
         }
@@ -1309,19 +1349,21 @@ public sealed class MainViewModel : ObservableObject
         if (metrics.HasJupiterCollision)
             return -1e12;
 
+        if (!metrics.HasReturnToInitialDistance)
+            return -1e10;
+
         if (!metrics.HasSphereOfInfluenceCrossing)
             return -1e9;
 
-        double deltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0;
-        double saturnMissAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit;
-        double lowFlybyPenalty = Math.Max(0.0, (AstronomyConstants.JupiterLowFlybyDistance - metrics.MinDistanceToJupiter) / AstronomyConstants.JupiterMeanRadius);
-        return deltaVGainKms - saturnMissAu - 5.0 * lowFlybyPenalty;
+        return metrics.DeltaVGainHeliocentric / 1000.0;
     }
 
     private static string DescribeFlybyStatus(FlybyMetrics metrics)
     {
         if (metrics.HasJupiterCollision)
             return "столкновение с Юпитером";
+        if (!metrics.HasReturnToInitialDistance)
+            return "не достигнуто исходное удаление от Юпитера";
         if (!metrics.HasSphereOfInfluenceCrossing)
             return "нет корректного входа/выхода из SOI";
         if (metrics.HasDangerouslyLowJupiterFlyby)
@@ -1339,6 +1381,8 @@ public sealed class MainViewModel : ObservableObject
 
         if (metrics.HasJupiterCollision)
             return $"Недопустимая траектория: столкновение с Юпитером. Точек: {sampleCount:n0}";
+        if (!metrics.HasReturnToInitialDistance)
+            return $"Недопустимая траектория: не достигнуто исходное удаление r0. Точек: {sampleCount:n0}";
         if (!metrics.HasSphereOfInfluenceCrossing)
             return $"Манёвр не состоялся: нет корректного пересечения SOI. Точек: {sampleCount:n0}";
         if (metrics.HasDangerouslyLowJupiterFlyby)
@@ -1364,6 +1408,7 @@ public sealed class MainViewModel : ObservableObject
 
         var sb = new StringBuilder();
         sb.AppendLine($"Статус: {DescribeFlybyStatus(metrics)}.");
+        sb.AppendLine($"Стартовое расстояние r0: {metrics.InitialDistanceToJupiter / 1000.0:n0} км.");
         sb.AppendLine($"Минимальная дистанция до Юпитера: {metrics.MinDistanceToJupiter / 1000.0:n0} км.");
         sb.AppendLine($"Высота ближайшего подхода: {Math.Max(0.0, metrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км.");
         if (metrics.HasJupiterCollision)
@@ -1371,6 +1416,8 @@ public sealed class MainViewModel : ObservableObject
             sb.AppendLine("Этот вариант недопустим: аппарат пересёк радиус Юпитера.");
             sb.AppendLine($"Анимация обрезана по кадру столкновения: {metrics.JupiterCollisionIndex + 1}.");
         }
+        else if (!metrics.HasReturnToInitialDistance)
+            sb.AppendLine("Этот вариант недопустим: после облёта аппарат не вернулся на исходное удаление r0.");
         else if (metrics.HasDangerouslyLowJupiterFlyby)
             sb.AppendLine("Это предупреждение: траектория прошла ниже рекомендованной границы 2Rj.");
         else if (!metrics.HasSphereOfInfluenceCrossing)
@@ -1407,11 +1454,11 @@ public sealed class MainViewModel : ObservableObject
             top.RemoveRange(capacity, top.Count - capacity);
     }
 
-    private static string BuildOptimizationProgressText(int current, int total, IReadOnlyList<OptimizationCandidate> top, int validCount, int collisionCount, int lowFlybyCount, int noSoiCount)
+    private static string BuildOptimizationProgressText(int current, int total, IReadOnlyList<OptimizationCandidate> top, int validCount, int collisionCount, int lowFlybyCount, int noSoiCount, int noReturnCount)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Проверено траекторий: {current} / {total}");
-        sb.AppendLine($"Допустимых: {validCount}, столкновений: {collisionCount}, низких пролётов: {lowFlybyCount}, без входа в SOI: {noSoiCount}");
+        sb.AppendLine($"Допустимых: {validCount}, столкновений: {collisionCount}, низких пролётов: {lowFlybyCount}, без входа в SOI: {noSoiCount}, без возврата на r0: {noReturnCount}");
         if (top.Count > 0)
         {
             sb.AppendLine();
@@ -1422,7 +1469,7 @@ public sealed class MainViewModel : ObservableObject
         return sb.ToString().TrimEnd();
     }
 
-    private static string BuildOptimizationSummary(IReadOnlyList<OptimizationCandidate> top, FlybyMetrics? bestMetrics, double bestScore, int validCount, int collisionCount, int lowFlybyCount, int noSoiCount)
+    private static string BuildOptimizationSummary(IReadOnlyList<OptimizationCandidate> top, FlybyMetrics? bestMetrics, double bestScore, int validCount, int collisionCount, int lowFlybyCount, int noSoiCount, int noReturnCount)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Лучший score: {bestScore:F3}");
@@ -1430,10 +1477,11 @@ public sealed class MainViewModel : ObservableObject
         sb.AppendLine($"Столкновений с Юпитером: {collisionCount}");
         sb.AppendLine($"Низких пролётов (< 2Rj): {lowFlybyCount}");
         sb.AppendLine($"Без корректного пересечения SOI: {noSoiCount}");
+        sb.AppendLine($"Без возврата на исходное расстояние r0: {noReturnCount}");
         if (bestMetrics is not null)
         {
             sb.AppendLine($"Статус лучшего кандидата: {DescribeFlybyStatus(bestMetrics)}");
-            sb.AppendLine($"Δv на SOI Юпитера: {bestMetrics.DeltaVGainHeliocentric / 1000.0:F3} км/с");
+            sb.AppendLine($"Δv при возврате на r0: {bestMetrics.DeltaVGainHeliocentric / 1000.0:F3} км/с");
             sb.AppendLine($"Мин. дистанция до Сатурна: {bestMetrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit:F4} а.е.");
             sb.AppendLine($"Мин. дистанция до Юпитера: {bestMetrics.MinDistanceToJupiter / 1000.0:n0} км");
             sb.AppendLine($"Высота ближайшего подхода: {Math.Max(0.0, bestMetrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км");
@@ -1579,7 +1627,7 @@ public sealed class MainViewModel : ObservableObject
         sb.AppendLine("## Ограничения на траекторию");
         sb.AppendLine($"Столкновение с Юпитером: d_min <= Rj, где Rj = {AstronomyConstants.JupiterMeanRadius:R} м.");
         sb.AppendLine($"Низкий пролёт: d_min < 2Rj = {AstronomyConstants.JupiterLowFlybyDistance:R} м.");
-        sb.AppendLine("Для оптимизации недопустимы варианты без корректного входа/выхода из SOI Юпитера и варианты со столкновением.");
+        sb.AppendLine("Для оптимизации недопустимы варианты без корректного входа/выхода из SOI Юпитера, без возврата на исходное расстояние r0 и варианты со столкновением.");
         sb.AppendLine("Для общей системы тел используется критерий столкновения d_ij <= R_i + R_j.");
         sb.AppendLine();
 
@@ -1589,7 +1637,8 @@ public sealed class MainViewModel : ObservableObject
         if (scenario.SpacecraftIndex >= 0 && flybyMetrics is not null)
         {
             sb.AppendLine($"Статус пролёта: {DescribeFlybyStatus(flybyMetrics)}");
-            sb.AppendLine($"Δv на входе/выходе SOI Юпитера: {flybyMetrics.DeltaVGainHeliocentric / 1000.0:F6} км/с");
+            sb.AppendLine($"Начальное расстояние до Юпитера r0: {flybyMetrics.InitialDistanceToJupiter / 1000.0:F6} км");
+            sb.AppendLine($"Δv при возврате на исходное расстояние r0: {flybyMetrics.DeltaVGainHeliocentric / 1000.0:F6} км/с");
             sb.AppendLine($"Мин. расстояние до Юпитера: {flybyMetrics.MinDistanceToJupiter / 1000.0:n0} км");
             sb.AppendLine($"Высота ближайшего подхода над Юпитером: {Math.Max(0.0, flybyMetrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км");
             sb.AppendLine($"Мин. расстояние до Сатурна: {flybyMetrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit:F6} а.е.");
@@ -1597,6 +1646,8 @@ public sealed class MainViewModel : ObservableObject
             sb.AppendLine($"|v∞| после Юпитера: {flybyMetrics.FinalJupiterRelativeSpeed / 1000.0:F6} км/с");
             if (flybyMetrics.HasJupiterCollision)
                 sb.AppendLine($"Кадр столкновения: {flybyMetrics.JupiterCollisionIndex + 1}");
+            else if (flybyMetrics.HasReturnToInitialDistance)
+                sb.AppendLine($"Кадр возврата на r0: {flybyMetrics.EqualDistanceIndex + 1}");
         }
         else
         {

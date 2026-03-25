@@ -2,6 +2,7 @@ namespace PhysicsSim.Core;
 
 public sealed class FlybyMetrics
 {
+    public required double InitialDistanceToJupiter { get; init; }
     public required double JupiterSoiRadius { get; init; }
     public required double MinDistanceToJupiter { get; init; }
     public required double MinDistanceToSaturn { get; init; }
@@ -11,14 +12,16 @@ public sealed class FlybyMetrics
     public required double InitialJupiterRelativeSpeed { get; init; }
     public required double FinalJupiterRelativeSpeed { get; init; }
     public required double DeltaVGainHeliocentric { get; init; }
+    public required int EqualDistanceIndex { get; init; }
     public required int EntryIndex { get; init; }
     public required int ExitIndex { get; init; }
     public required int ClosestApproachIndex { get; init; }
     public required int JupiterCollisionIndex { get; init; }
 
     public bool HasSphereOfInfluenceCrossing => EntryIndex >= 0 && ExitIndex > EntryIndex;
+    public bool HasReturnToInitialDistance => EqualDistanceIndex > ClosestApproachIndex;
     public bool HasJupiterCollision => MinDistanceToJupiter <= AstronomyConstants.JupiterMeanRadius;
     public bool HasDangerouslyLowJupiterFlyby =>
         !HasJupiterCollision && MinDistanceToJupiter < AstronomyConstants.JupiterLowFlybyDistance;
-    public bool IsFeasibleFlyby => HasSphereOfInfluenceCrossing && !HasJupiterCollision;
+    public bool IsFeasibleFlyby => HasSphereOfInfluenceCrossing && HasReturnToInitialDistance && !HasJupiterCollision;
 }

@@ -11,6 +11,7 @@ public static class NBodySimulator
         double outputDt,
         IntegrationSettings settings,
         IReadOnlyList<double>? collisionRadii = null,
+        StopCondition? stopCondition = null,
         CancellationToken cancellationToken = default)
     {
         var times = new List<double>(capacity: (int)Math.Ceiling((t1 - t0) / outputDt) + 1);
@@ -43,10 +44,10 @@ public static class NBodySimulator
             (t, state) =>
             {
                 collision = TryDetectCollision(system, state, collisionRadii, t);
-                if (collision is null)
-                    return null;
+                if (collision is not null)
+                    return $"Столкновение: {collision.BodyAName} ↔ {collision.BodyBName}";
 
-                return $"Столкновение: {collision.BodyAName} ↔ {collision.BodyBName}";
+                return stopCondition?.Invoke(t, state);
             },
             cancellationToken);
 

@@ -26,9 +26,11 @@ public static class FlybyAnalysis
 
         double minDistJ = double.PositiveInfinity;
         double minDistSaturn = double.PositiveInfinity;
+        double initialDistanceToJupiter = (result.Positions[0][spacecraftIndex] - result.Positions[0][planetIndex]).Length();
         int minDistJIndex = 0;
         int entryIndex = -1;
         int exitIndex = -1;
+        int equalDistanceIndex = -1;
         int collisionIndex = -1;
 
         bool insidePrev = false;
@@ -48,6 +50,8 @@ public static class FlybyAnalysis
                 exitIndex = i;
             if (collisionIndex < 0 && distJ <= AstronomyConstants.JupiterMeanRadius)
                 collisionIndex = i;
+            if (equalDistanceIndex < 0 && i > minDistJIndex && distJ >= initialDistanceToJupiter)
+                equalDistanceIndex = i;
             insidePrev = inside;
 
             if (saturnIndex >= 0 && saturnIndex < result.BodyCount)
@@ -63,18 +67,18 @@ public static class FlybyAnalysis
         if (exitIndex < 0 && entryIndex >= 0)
             exitIndex = result.SampleCount - 1;
 
-        int vInIndex = entryIndex >= 0 ? entryIndex : 0;
-        int vOutIndex = exitIndex > vInIndex ? exitIndex : result.SampleCount - 1;
+        int vInIndex = 0;
+        int vOutIndex = equalDistanceIndex > vInIndex ? equalDistanceIndex : result.SampleCount - 1;
 
         double initialHeliocentricSpeed = RelativeSpeed(result, spacecraftIndex, sunIndex, 0);
-        double finalHeliocentricSpeed = RelativeSpeed(result, spacecraftIndex, sunIndex, result.SampleCount - 1);
-        double initialJupiterRelativeSpeed = RelativeSpeed(result, spacecraftIndex, planetIndex, vInIndex);
+        double finalHeliocentricSpeed = RelativeSpeed(result, spacecraftIndex, sunIndex, vOutIndex);
+        double initialJupiterRelativeSpeed = RelativeSpeed(result, spacecraftIndex, planetIndex, 0);
         double finalJupiterRelativeSpeed = RelativeSpeed(result, spacecraftIndex, planetIndex, vOutIndex);
-        double deltaVGain = RelativeSpeed(result, spacecraftIndex, sunIndex, vOutIndex)
-            - RelativeSpeed(result, spacecraftIndex, sunIndex, vInIndex);
+        double deltaVGain = finalHeliocentricSpeed - initialHeliocentricSpeed;
 
         return new FlybyMetrics
         {
+            InitialDistanceToJupiter = initialDistanceToJupiter,
             JupiterSoiRadius = planetSoiRadius,
             MinDistanceToJupiter = minDistJ,
             MinDistanceToSaturn = minDistSaturn,
@@ -84,6 +88,7 @@ public static class FlybyAnalysis
             InitialJupiterRelativeSpeed = initialJupiterRelativeSpeed,
             FinalJupiterRelativeSpeed = finalJupiterRelativeSpeed,
             DeltaVGainHeliocentric = deltaVGain,
+            EqualDistanceIndex = equalDistanceIndex,
             EntryIndex = entryIndex,
             ExitIndex = exitIndex,
             ClosestApproachIndex = minDistJIndex,
