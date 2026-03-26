@@ -17,6 +17,8 @@ namespace InterplanetaryManeuver.App.ViewModels;
 
 public sealed class MainViewModel : ObservableObject
 {
+    private const double SaturnMissPenaltyWeight = 40.0;
+
     private static readonly SolidColorBrush SunBrush = new(Color.FromRgb(0xFF, 0xD2, 0x4A));
     private static readonly SolidColorBrush JupiterBrush = new(Color.FromRgb(0x5A, 0xE4, 0xFF));
     private static readonly SolidColorBrush SaturnBrush = new(Color.FromRgb(0xFF, 0xB4, 0x5A));
@@ -36,6 +38,9 @@ public sealed class MainViewModel : ObservableObject
     private double _phaseAngleDeg = -35.0;
     private double _headingAngleDeg = 11.0;
     private double _vInfinityKms = 9.5;
+    private double _idealStartDistanceKm = 3_000_000.0;
+    private double _idealSafeRadiusKm = 120_000.0;
+    private double _idealPlanetSpeedKms = 13.07;
     private bool _isRunning;
     private string _statusText = "Готово.";
     private string _metricsText = "Симуляция еще не запускалась.";
@@ -45,6 +50,15 @@ public sealed class MainViewModel : ObservableObject
     private IReadOnlyList<LineSeries> _orbitSeries = Array.Empty<LineSeries>();
     private IReadOnlyList<LineSeries> _speedSeries = Array.Empty<LineSeries>();
     private IReadOnlyList<LineSeries> _speedComponentSeries = Array.Empty<LineSeries>();
+    private string _orbitPlotTitle = "Траектории (относительно Солнца)";
+    private string _orbitPlotXLabel = "X (а.е.)";
+    private string _orbitPlotYLabel = "Y (а.е.)";
+    private string _speedPlotTitle = "Скорость аппарата";
+    private string _speedPlotXLabel = "t (сутки)";
+    private string _speedPlotYLabel = "v (км/с)";
+    private string _speedComponentPlotTitle = "Компоненты скорости";
+    private string _speedComponentPlotXLabel = "t (сутки)";
+    private string _speedComponentPlotYLabel = "Vx, Vy, Vz (км/с)";
 
     private double _optPhaseMinDeg = -70;
     private double _optPhaseMaxDeg = 30;
@@ -72,6 +86,7 @@ public sealed class MainViewModel : ObservableObject
     private bool _isAnimationPlaying;
     private double _animationSpeedMultiplier = 1.0;
     private string _animationStatusText = "Запустите расчёт, чтобы увидеть статус пролёта.";
+    private int _animationViewResetVersion;
 
     private SimulationResult? _lastResult;
     private SimulationScenario? _lastScenario;
@@ -92,6 +107,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly RelayCommand _loadBodiesCommand;
     private readonly RelayCommand _toggleAnimationCommand;
     private readonly RelayCommand _resetAnimationCommand;
+    private readonly RelayCommand _resetAnimationViewCommand;
     private readonly RelayCommand<EditableBody> _removeCustomBodyItemCommand;
 
     public MainViewModel()
@@ -117,8 +133,8 @@ public sealed class MainViewModel : ObservableObject
         _runCommand = new RelayCommand(() => _ = RunAsync(), () => !IsRunning);
         _optimizeCommand = new RelayCommand(() => _ = OptimizeAsync(), CanOptimize);
         _cancelCommand = new RelayCommand(Cancel, () => IsRunning);
-        _saveReportCommand = new RelayCommand(SaveReport, () => HasResults && !IsRunning);
-        _exportCsvCommand = new RelayCommand(ExportCsv, () => HasResults && !IsRunning);
+        _saveReportCommand = new RelayCommand(SaveReport, () => HasResults && !IsRunning && !string.IsNullOrWhiteSpace(ReportText));
+        _exportCsvCommand = new RelayCommand(ExportCsv, () => HasResults && !IsRunning && _lastResult is not null);
         _runSandboxCommand = new RelayCommand(() => _ = RunSandboxAsync(), () => !IsRunning && CustomBodies.Count > 0);
         _addBodyCommand = new RelayCommand(AddCustomBody, () => !IsRunning);
         _removeBodyCommand = new RelayCommand(RemoveSelectedCustomBody, () => !IsRunning && SelectedCustomBody is not null);
@@ -126,6 +142,7 @@ public sealed class MainViewModel : ObservableObject
         _loadBodiesCommand = new RelayCommand(LoadCustomBodies, () => !IsRunning);
         _toggleAnimationCommand = new RelayCommand(ToggleAnimationPlayback, () => AnimationFrameCount > 1);
         _resetAnimationCommand = new RelayCommand(ResetAnimation, () => AnimationFrameCount > 0);
+        _resetAnimationViewCommand = new RelayCommand(ResetAnimationView);
         _removeCustomBodyItemCommand = new RelayCommand<EditableBody>(RemoveCustomBodyItem, body => !IsRunning && body is not null);
 
         RunCommand = _runCommand;
@@ -140,6 +157,7 @@ public sealed class MainViewModel : ObservableObject
         LoadBodiesCommand = _loadBodiesCommand;
         ToggleAnimationCommand = _toggleAnimationCommand;
         ResetAnimationCommand = _resetAnimationCommand;
+        ResetAnimationViewCommand = _resetAnimationViewCommand;
         RemoveCustomBodyItemCommand = _removeCustomBodyItemCommand;
     }
 
@@ -156,6 +174,8 @@ public sealed class MainViewModel : ObservableObject
 
             ResetOutputs();
             _optimizeCommand?.RaiseCanExecuteChanged();
+            RaisePropertyChanged(nameof(IsIdealFlybyPreset));
+            RaisePropertyChanged(nameof(IsNumericalFlybyPreset));
         }
     }
 
@@ -205,6 +225,24 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _vInfinityKms;
         set => SetProperty(ref _vInfinityKms, value);
+    }
+
+    public double IdealStartDistanceKm
+    {
+        get => _idealStartDistanceKm;
+        set => SetProperty(ref _idealStartDistanceKm, Math.Max(1000.0, value));
+    }
+
+    public double IdealSafeRadiusKm
+    {
+        get => _idealSafeRadiusKm;
+        set => SetProperty(ref _idealSafeRadiusKm, Math.Max(1000.0, value));
+    }
+
+    public double IdealPlanetSpeedKms
+    {
+        get => _idealPlanetSpeedKms;
+        set => SetProperty(ref _idealPlanetSpeedKms, Math.Max(0.01, value));
     }
 
     public double OptPhaseMinDeg
@@ -407,6 +445,12 @@ public sealed class MainViewModel : ObservableObject
         private set => SetProperty(ref _animationStatusText, value);
     }
 
+    public int AnimationViewResetVersion
+    {
+        get => _animationViewResetVersion;
+        private set => SetProperty(ref _animationViewResetVersion, value);
+    }
+
     public bool IsRunning
     {
         get => _isRunning;
@@ -483,6 +527,66 @@ public sealed class MainViewModel : ObservableObject
         private set => SetProperty(ref _speedComponentSeries, value);
     }
 
+    public string OrbitPlotTitle
+    {
+        get => _orbitPlotTitle;
+        private set => SetProperty(ref _orbitPlotTitle, value);
+    }
+
+    public string OrbitPlotXLabel
+    {
+        get => _orbitPlotXLabel;
+        private set => SetProperty(ref _orbitPlotXLabel, value);
+    }
+
+    public string OrbitPlotYLabel
+    {
+        get => _orbitPlotYLabel;
+        private set => SetProperty(ref _orbitPlotYLabel, value);
+    }
+
+    public string SpeedPlotTitle
+    {
+        get => _speedPlotTitle;
+        private set => SetProperty(ref _speedPlotTitle, value);
+    }
+
+    public string SpeedPlotXLabel
+    {
+        get => _speedPlotXLabel;
+        private set => SetProperty(ref _speedPlotXLabel, value);
+    }
+
+    public string SpeedPlotYLabel
+    {
+        get => _speedPlotYLabel;
+        private set => SetProperty(ref _speedPlotYLabel, value);
+    }
+
+    public string SpeedComponentPlotTitle
+    {
+        get => _speedComponentPlotTitle;
+        private set => SetProperty(ref _speedComponentPlotTitle, value);
+    }
+
+    public string SpeedComponentPlotXLabel
+    {
+        get => _speedComponentPlotXLabel;
+        private set => SetProperty(ref _speedComponentPlotXLabel, value);
+    }
+
+    public string SpeedComponentPlotYLabel
+    {
+        get => _speedComponentPlotYLabel;
+        private set => SetProperty(ref _speedComponentPlotYLabel, value);
+    }
+
+    public bool IsIdealFlybyPreset => SelectedPreset?.Kind == SimulationPresetKind.IdealFlyby;
+
+    public bool IsNumericalFlybyPreset =>
+        SelectedPreset?.Kind == SimulationPresetKind.JupiterFlyby ||
+        SelectedPreset?.Kind == SimulationPresetKind.ExtendedJupiterFlyby;
+
     public ICommand RunCommand { get; }
     public ICommand OptimizeCommand { get; }
     public ICommand CancelCommand { get; }
@@ -495,6 +599,7 @@ public sealed class MainViewModel : ObservableObject
     public ICommand LoadBodiesCommand { get; }
     public ICommand ToggleAnimationCommand { get; }
     public ICommand ResetAnimationCommand { get; }
+    public ICommand ResetAnimationViewCommand { get; }
     public ICommand RemoveCustomBodyItemCommand { get; }
 
     private static void FreezeBrushes()
@@ -516,7 +621,9 @@ public sealed class MainViewModel : ObservableObject
 
     private bool CanOptimize()
     {
-        return !IsRunning && SelectedPreset?.Kind == SimulationPresetKind.JupiterFlyby;
+        return !IsRunning &&
+               (SelectedPreset?.Kind == SimulationPresetKind.JupiterFlyby ||
+                SelectedPreset?.Kind == SimulationPresetKind.ExtendedJupiterFlyby);
     }
 
     private async Task RunAsync()
@@ -524,6 +631,31 @@ public sealed class MainViewModel : ObservableObject
         if (SelectedPreset is null)
         {
             StatusText = "Выберите пресет.";
+            return;
+        }
+
+        if (SelectedPreset.Kind == SimulationPresetKind.IdealFlyby)
+        {
+            SetBusyState("Вычисляется идеальный flyby...");
+
+            try
+            {
+                IdealFlybyResult ideal = ComputeIdealFlyby();
+                ApplyIdealFlybyOutputs(ideal);
+            }
+            catch (OperationCanceledException)
+            {
+                ApplyCanceledState();
+            }
+            catch (Exception ex)
+            {
+                ApplyErrorState(ex);
+            }
+            finally
+            {
+                IsRunning = false;
+            }
+
             return;
         }
 
@@ -538,7 +670,11 @@ public sealed class MainViewModel : ObservableObject
 
         try
         {
-            FlybySetup? flybySetup = SelectedPreset.Kind == SimulationPresetKind.JupiterFlyby ? GetCurrentFlybySetup() : null;
+            FlybySetup? flybySetup =
+                SelectedPreset.Kind == SimulationPresetKind.JupiterFlyby ||
+                SelectedPreset.Kind == SimulationPresetKind.ExtendedJupiterFlyby
+                    ? GetCurrentFlybySetup()
+                    : null;
             SimulationScenario scenario = await BuildScenarioAsync(epochUtc, flybySetup, _cts!.Token);
             IntegrationSettings settings = CreateIntegrationSettings();
             SimulationResult result = await SimulateAsync(scenario, settings, _cts.Token);
@@ -563,9 +699,10 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task OptimizeAsync()
     {
-        if (SelectedPreset?.Kind != SimulationPresetKind.JupiterFlyby)
+        if (SelectedPreset?.Kind != SimulationPresetKind.JupiterFlyby &&
+            SelectedPreset?.Kind != SimulationPresetKind.ExtendedJupiterFlyby)
         {
-            OptimizationText = "Оптимизация доступна только для сценария гравиманевра у Юпитера.";
+            OptimizationText = "Оптимизация доступна только для численных сценариев flyby у Юпитера.";
             return;
         }
 
@@ -662,7 +799,7 @@ public sealed class MainViewModel : ObservableObject
 
             ApplySimulationOutputs(bestResult, bestScenario, settings, bestMetrics);
             OptimizationText = BuildOptimizationSummary(top, bestMetrics, bestScore, validCount, collisionCount, lowFlybyCount, noSoiCount, noReturnCount);
-            StatusText = $"Оптимизация завершена. Лучший score = {bestScore:F3}";
+            StatusText = $"Оптимизация завершена. Лучший score = {bestScore:F3} (учтён промах по Сатурну)";
         }
         catch (OperationCanceledException)
         {
@@ -839,6 +976,11 @@ public sealed class MainViewModel : ObservableObject
         AnimationFrameIndex = 0;
     }
 
+    private void ResetAnimationView()
+    {
+        AnimationViewResetVersion++;
+    }
+
     private void AdvanceAnimationFrame()
     {
         if (AnimationFrameCount <= 1)
@@ -1012,15 +1154,15 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        if (!metrics.HasReturnToInitialDistance)
-        {
-            noReturnCount++;
-            return;
-        }
-
         if (!metrics.HasSphereOfInfluenceCrossing)
         {
             noSoiCount++;
+            return;
+        }
+
+        if (!metrics.HasReturnToInitialDistance)
+        {
+            noReturnCount++;
             return;
         }
 
@@ -1208,8 +1350,241 @@ public sealed class MainViewModel : ObservableObject
         HasResults = true;
     }
 
+    private void ApplyIdealFlybyOutputs(IdealFlybyResult result)
+    {
+        OrbitSeries = result.OrbitSeries;
+        SpeedSeries = result.SpeedSeries;
+        SpeedComponentSeries = result.SpeedComponentSeries;
+        MetricsText = result.MetricsText;
+        ReportText = result.ReportText;
+        StatusText = result.StatusText;
+        OptimizationText = "Для аналитического режима используется отдельная формульная оценка без численной оптимизации.";
+        AnimationScene = null;
+        AnimationFrameCount = 0;
+        AnimationFrameIndex = 0;
+        AnimationStatusText = "Аналитический режим не использует покадровую анимацию N-body.";
+        OrbitPlotTitle = "Идеальная траектория flyby (система Юпитера)";
+        OrbitPlotXLabel = "X (млн км)";
+        OrbitPlotYLabel = "Y (млн км)";
+        SpeedPlotTitle = "Скорость в идеальной модели";
+        SpeedPlotXLabel = "Прогресс вдоль траектории";
+        SpeedPlotYLabel = "v (км/с)";
+        SpeedComponentPlotTitle = "Гелиоцентрическая скорость в идеальной модели";
+        SpeedComponentPlotXLabel = "Прогресс вдоль траектории";
+        SpeedComponentPlotYLabel = "Vx, Vy и |v| (км/с)";
+        _lastResult = null;
+        _lastScenario = null;
+        _lastSettings = null;
+        _lastFlybyMetrics = null;
+        HasResults = true;
+    }
+
+    private IdealFlybyResult ComputeIdealFlyby()
+    {
+        double r0 = IdealStartDistanceKm * 1000.0;
+        double q = IdealSafeRadiusKm * 1000.0;
+        double vp = IdealPlanetSpeedKms * 1000.0;
+        double rJ = AstronomyConstants.JupiterMeanRadius;
+
+        if (q <= rJ)
+            throw new InvalidOperationException($"Для идеальной модели радиус пролёта R должен быть больше радиуса Юпитера ({rJ / 1000.0:n0} км).");
+        if (r0 <= q)
+            throw new InvalidOperationException("Для идеальной модели стартовое расстояние r0 должно быть больше радиуса пролёта R.");
+
+        double mu = 6.67430e-11 * AstronomyConstants.JupiterMass;
+        double cosNu = Clamp(2.0 * q / r0 - 1.0, -1.0, 1.0);
+        double nuLimit = Math.Acos(cosNu);
+        const int sampleCount = 240;
+
+        var rawPoints = new Point[sampleCount];
+        for (int i = 0; i < sampleCount; i++)
+        {
+            double t = i / (double)(sampleCount - 1);
+            double nu = -nuLimit + (2.0 * nuLimit * t);
+            double r = 2.0 * q / (1.0 + Math.Cos(nu));
+            rawPoints[i] = new Point(r * Math.Cos(nu), r * Math.Sin(nu));
+        }
+
+        var tangents = new Vector[sampleCount];
+        for (int i = 0; i < sampleCount; i++)
+        {
+            Point prev = rawPoints[Math.Max(0, i - 1)];
+            Point next = rawPoints[Math.Min(sampleCount - 1, i + 1)];
+            Vector tangent = next - prev;
+            tangent.Normalize();
+            tangents[i] = tangent;
+        }
+
+        double endAngle = Math.Atan2(tangents[^1].Y, tangents[^1].X);
+        double rotation = -endAngle;
+
+        var trajectory = new Point[sampleCount];
+        var jupiterCircle = BuildCircleSeries(rJ / 1_000_000.0, 128);
+        var safeCircle = BuildCircleSeries(q / 1_000_000.0, 128);
+        var vRelPoints = new Point[sampleCount];
+        var vHelioPoints = new Point[sampleCount];
+        var vxHelioPoints = new Point[sampleCount];
+        var vyHelioPoints = new Point[sampleCount];
+
+        Vector startTangent = default;
+        Vector endTangent = default;
+        double initialHeliocentricSpeed = 0.0;
+        double finalHeliocentricSpeed = 0.0;
+        double maxRelativeSpeed = 0.0;
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            double progress = i / (double)(sampleCount - 1);
+            Point rotatedPoint = Rotate(rawPoints[i], rotation);
+            Vector tangent = Rotate(tangents[i], rotation);
+            double radius = Math.Sqrt(rawPoints[i].X * rawPoints[i].X + rawPoints[i].Y * rawPoints[i].Y);
+            double vRel = Math.Sqrt(2.0 * mu / radius);
+            Vector vHelio = new(tangent.X * vRel + vp, tangent.Y * vRel);
+
+            trajectory[i] = new Point(rotatedPoint.X / 1_000_000.0, rotatedPoint.Y / 1_000_000.0);
+            vRelPoints[i] = new Point(progress, vRel / 1000.0);
+            vHelioPoints[i] = new Point(progress, vHelio.Length / 1000.0);
+            vxHelioPoints[i] = new Point(progress, vHelio.X / 1000.0);
+            vyHelioPoints[i] = new Point(progress, vHelio.Y / 1000.0);
+            maxRelativeSpeed = Math.Max(maxRelativeSpeed, vRel);
+
+            if (i == 0)
+            {
+                startTangent = tangent;
+                initialHeliocentricSpeed = vHelio.Length;
+            }
+
+            if (i == sampleCount - 1)
+            {
+                endTangent = tangent;
+                finalHeliocentricSpeed = vHelio.Length;
+            }
+        }
+
+        double turnAngleDeg = Math.Acos(Clamp((startTangent.X * endTangent.X + startTangent.Y * endTangent.Y), -1.0, 1.0)) * 180.0 / Math.PI;
+        double vStartRelative = Math.Sqrt(2.0 * mu / r0);
+        double deltaV = finalHeliocentricSpeed - initialHeliocentricSpeed;
+
+        var orbitSeries =
+            new List<LineSeries>
+            {
+                new()
+                {
+                    Name = "Юпитер",
+                    Points = jupiterCircle,
+                    Stroke = JupiterBrush,
+                    Thickness = 2.0,
+                },
+                new()
+                {
+                    Name = "Граница R",
+                    Points = safeCircle,
+                    Stroke = SaturnBrush,
+                    Thickness = 1.6,
+                },
+                new()
+                {
+                    Name = "Идеальная парабола",
+                    Points = trajectory,
+                    Stroke = SpacecraftBrush,
+                    Thickness = 2.6,
+                },
+            };
+
+        var speedSeries =
+            new List<LineSeries>
+            {
+                new()
+                {
+                    Name = "|v| в системе Юпитера",
+                    Points = vRelPoints,
+                    Stroke = JupiterBrush,
+                    Thickness = 2.0,
+                },
+                new()
+                {
+                    Name = "|v| в гелиоцентрической системе",
+                    Points = vHelioPoints,
+                    Stroke = SpacecraftBrush,
+                    Thickness = 2.2,
+                },
+            };
+
+        var componentSeries =
+            new List<LineSeries>
+            {
+                new() { Name = "Vx (гелиоцентрическая)", Points = vxHelioPoints, Stroke = VxBrush, Thickness = 1.8 },
+                new() { Name = "Vy (гелиоцентрическая)", Points = vyHelioPoints, Stroke = VyBrush, Thickness = 1.8 },
+                new() { Name = "|v| (гелиоцентрическая)", Points = vHelioPoints, Stroke = SpacecraftBrush, Thickness = 2.0 },
+            };
+
+        var metrics = new StringBuilder();
+        metrics.AppendLine("Режим: идеальный аналитический flyby.");
+        metrics.AppendLine("Траектория: парабола в системе Юпитера.");
+        metrics.AppendLine($"Стартовое расстояние r0: {IdealStartDistanceKm:n0} км");
+        metrics.AppendLine($"Минимальный радиус пролёта R: {IdealSafeRadiusKm:n0} км");
+        metrics.AppendLine($"Скорость Юпитера vp: {IdealPlanetSpeedKms:F3} км/с");
+        metrics.AppendLine($"|v| на старте в системе Юпитера: {vStartRelative / 1000.0:F3} км/с");
+        metrics.AppendLine($"|v| в перицентре в системе Юпитера: {maxRelativeSpeed / 1000.0:F3} км/с");
+        metrics.AppendLine($"Гелиоцентрическая скорость на старте: {initialHeliocentricSpeed / 1000.0:F3} км/с");
+        metrics.AppendLine($"Гелиоцентрическая скорость после пролёта: {finalHeliocentricSpeed / 1000.0:F3} км/с");
+        metrics.AppendLine($"Прирост Δv: {deltaV / 1000.0:F3} км/с");
+        metrics.AppendLine($"Угол поворота траектории: {turnAngleDeg:F2}°");
+
+        var report = new StringBuilder();
+        report.AppendLine("# Идеальный flyby");
+        report.AppendLine();
+        report.AppendLine("## Постановка");
+        report.AppendLine("Используется аналитическая идеализация гравитационного манёвра у Юпитера.");
+        report.AppendLine("В системе Юпитера траектория аппарата моделируется параболой, а гелиоцентрическая скорость получается сложением относительной скорости аппарата и скорости Юпитера.");
+        report.AppendLine();
+        report.AppendLine("## Формулы");
+        report.AppendLine("v(r) = sqrt(2 * G * M_J / r)");
+        report.AppendLine("r(ν) = 2R / (1 + cos(ν))");
+        report.AppendLine("v_helio = v_rel + v_planet");
+        report.AppendLine("Δv = |v_helio,out| - |v_helio,in|");
+        report.AppendLine();
+        report.AppendLine("## Параметры");
+        report.AppendLine($"r0 = {IdealStartDistanceKm:F3} км");
+        report.AppendLine($"R = {IdealSafeRadiusKm:F3} км");
+        report.AppendLine($"vp = {IdealPlanetSpeedKms:F6} км/с");
+        report.AppendLine();
+        report.AppendLine("## Результаты");
+        report.AppendLine($"Парабола ограничена участком от -ν0 до +ν0, где ν0 = arccos(2R/r0 - 1).");
+        report.AppendLine($"Стартовая скорость в системе Юпитера: {vStartRelative / 1000.0:F6} км/с.");
+        report.AppendLine($"Максимальная скорость в перицентре: {maxRelativeSpeed / 1000.0:F6} км/с.");
+        report.AppendLine($"Гелиоцентрическая скорость на входе: {initialHeliocentricSpeed / 1000.0:F6} км/с.");
+        report.AppendLine($"Гелиоцентрическая скорость на выходе: {finalHeliocentricSpeed / 1000.0:F6} км/с.");
+        report.AppendLine($"Прирост скорости: {deltaV / 1000.0:F6} км/с.");
+        report.AppendLine($"Угол поворота траектории: {turnAngleDeg:F6}°.");
+        report.AppendLine();
+        report.AppendLine("## Интерпретация");
+        report.AppendLine("В идеальной модели скорость аппарата в системе Юпитера возрастает при приближении к перицентру, а прирост гелиоцентрической скорости определяется главным образом поворотом вектора скорости.");
+        report.AppendLine("Этот режим нужен для аналитической защиты и сравнения с более реалистичной численной N-body моделью.");
+
+        return new IdealFlybyResult
+        {
+            OrbitSeries = orbitSeries,
+            SpeedSeries = speedSeries,
+            SpeedComponentSeries = componentSeries,
+            StatusText = $"Идеальный flyby рассчитан. Δv = {deltaV / 1000.0:F3} км/с",
+            MetricsText = metrics.ToString().TrimEnd(),
+            ReportText = report.ToString().TrimEnd(),
+        };
+    }
+
     private void BuildPlots(SimulationResult result, SimulationScenario scenario)
     {
+        OrbitPlotTitle = "Траектории (относительно Солнца)";
+        OrbitPlotXLabel = "X (а.е.)";
+        OrbitPlotYLabel = "Y (а.е.)";
+        SpeedPlotTitle = "Скорость аппарата";
+        SpeedPlotXLabel = "t (сутки)";
+        SpeedPlotYLabel = "v (км/с)";
+        SpeedComponentPlotTitle = "Компоненты скорости";
+        SpeedComponentPlotXLabel = "t (сутки)";
+        SpeedComponentPlotYLabel = "Vx, Vy, Vz (км/с)";
+
         int sunIndex = Math.Clamp(scenario.SunIndex, 0, result.BodyCount - 1);
         int scIndex = scenario.SpacecraftIndex;
 
@@ -1275,6 +1650,32 @@ public sealed class MainViewModel : ObservableObject
             new LineSeries { Name = "Vy (км/с)", Points = vyPts, Stroke = VyBrush, Thickness = 1.9 },
             new LineSeries { Name = "Vz (км/с)", Points = vzPts, Stroke = VzBrush, Thickness = 1.9 },
         ];
+    }
+
+    private static Point Rotate(Point point, double angle)
+    {
+        double c = Math.Cos(angle);
+        double s = Math.Sin(angle);
+        return new Point(point.X * c - point.Y * s, point.X * s + point.Y * c);
+    }
+
+    private static Vector Rotate(Vector vector, double angle)
+    {
+        double c = Math.Cos(angle);
+        double s = Math.Sin(angle);
+        return new Vector(vector.X * c - vector.Y * s, vector.X * s + vector.Y * c);
+    }
+
+    private static IReadOnlyList<Point> BuildCircleSeries(double radius, int samples)
+    {
+        var points = new Point[samples + 1];
+        for (int i = 0; i <= samples; i++)
+        {
+            double angle = 2.0 * Math.PI * i / samples;
+            points[i] = new Point(radius * Math.Cos(angle), radius * Math.Sin(angle));
+        }
+
+        return points;
     }
 
     private void BuildMetrics(SimulationResult result, SimulationScenario scenario, FlybyMetrics? flybyMetrics)
@@ -1349,44 +1750,46 @@ public sealed class MainViewModel : ObservableObject
         if (metrics.HasJupiterCollision)
             return -1e12;
 
-        if (!metrics.HasReturnToInitialDistance)
-            return -1e10;
-
         if (!metrics.HasSphereOfInfluenceCrossing)
             return -1e9;
 
-        return metrics.DeltaVGainHeliocentric / 1000.0;
+        if (!metrics.HasReturnToInitialDistance)
+            return -1e10;
+
+        double deltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0;
+        double saturnMissAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit;
+        return deltaVGainKms - SaturnMissPenaltyWeight * saturnMissAu;
     }
 
     private static string DescribeFlybyStatus(FlybyMetrics metrics)
     {
         if (metrics.HasJupiterCollision)
-            return "столкновение с Юпитером";
-        if (!metrics.HasReturnToInitialDistance)
-            return "не достигнуто исходное удаление от Юпитера";
+            return "Столкновение с Юпитером";
         if (!metrics.HasSphereOfInfluenceCrossing)
-            return "нет корректного входа/выхода из SOI";
+            return "Нет корректного входа/выхода из SOI";
+        if (!metrics.HasReturnToInitialDistance)
+            return "Не достигнуто исходное расстояние от Юпитера";
         if (metrics.HasDangerouslyLowJupiterFlyby)
-            return "допустимо, но пролёт слишком низкий";
-        return "допустимый пролёт";
+            return "Пролёт допустим, но слишком низкий";
+        return "Корректный пролёт";
     }
 
     private static string BuildRunStatus(SimulationResult result, FlybyMetrics? metrics, int sampleCount)
     {
         if (result.Collision is not null)
-            return $"Столкновение: {result.Collision.BodyAName} ↔ {result.Collision.BodyBName}. Точек: {sampleCount:n0}";
+            return $"Столкновение: {result.Collision.BodyAName} и {result.Collision.BodyBName}. Точек: {sampleCount:n0}";
 
         if (metrics is null)
             return $"Готово. Точек: {sampleCount:n0}";
 
         if (metrics.HasJupiterCollision)
-            return $"Недопустимая траектория: столкновение с Юпитером. Точек: {sampleCount:n0}";
-        if (!metrics.HasReturnToInitialDistance)
-            return $"Недопустимая траектория: не достигнуто исходное удаление r0. Точек: {sampleCount:n0}";
+            return $"Сценарий недопустим: столкновение с Юпитером. Точек: {sampleCount:n0}";
         if (!metrics.HasSphereOfInfluenceCrossing)
-            return $"Манёвр не состоялся: нет корректного пересечения SOI. Точек: {sampleCount:n0}";
+            return $"Пролёт не засчитан: нет корректного пересечения SOI. Точек: {sampleCount:n0}";
+        if (!metrics.HasReturnToInitialDistance)
+            return $"Сценарий недопустим: не достигнуто исходное расстояние r0. Точек: {sampleCount:n0}";
         if (metrics.HasDangerouslyLowJupiterFlyby)
-            return $"Низкий пролёт у Юпитера. Точек: {sampleCount:n0}";
+            return $"Пролёт слишком низкий у Юпитера. Точек: {sampleCount:n0}";
 
         return $"Готово. Точек: {sampleCount:n0}";
     }
@@ -1396,34 +1799,34 @@ public sealed class MainViewModel : ObservableObject
         if (result?.Collision is not null)
         {
             var sbCollision = new StringBuilder();
-            sbCollision.AppendLine($"Статус: {DescribeCollision(result.Collision)}.");
+            sbCollision.AppendLine($"Событие: {DescribeCollision(result.Collision)}.");
             sbCollision.AppendLine($"Момент: t = {result.Collision.Time / 86400.0:F3} суток.");
-            sbCollision.AppendLine($"Дистанция: {result.Collision.Distance / 1000.0:n0} км при пороге {result.Collision.ThresholdDistance / 1000.0:n0} км.");
-            sbCollision.AppendLine("Симуляция остановлена в момент первого пересечения радиусов тел.");
+            sbCollision.AppendLine($"Сближение: {result.Collision.Distance / 1000.0:n0} км при пороге {result.Collision.ThresholdDistance / 1000.0:n0} км.");
+            sbCollision.AppendLine("Анимация остановлена в момент первого пересечения радиусов тел.");
             return sbCollision.ToString().TrimEnd();
         }
 
         if (metrics is null)
-            return "Для текущей сцены нет отдельного статуса пролёта.";
+            return "Нет данных flyby для описания статуса пролёта.";
 
         var sb = new StringBuilder();
         sb.AppendLine($"Статус: {DescribeFlybyStatus(metrics)}.");
-        sb.AppendLine($"Стартовое расстояние r0: {metrics.InitialDistanceToJupiter / 1000.0:n0} км.");
-        sb.AppendLine($"Минимальная дистанция до Юпитера: {metrics.MinDistanceToJupiter / 1000.0:n0} км.");
-        sb.AppendLine($"Высота ближайшего подхода: {Math.Max(0.0, metrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км.");
+        sb.AppendLine($"Начальное расстояние r0: {metrics.InitialDistanceToJupiter / 1000.0:n0} км.");
+        sb.AppendLine($"Минимальное расстояние до Юпитера: {metrics.MinDistanceToJupiter / 1000.0:n0} км.");
+        sb.AppendLine($"Высота ближайшего пролёта: {Math.Max(0.0, metrics.ClosestApproachAltitudeToJupiter) / 1000.0:n0} км.");
         if (metrics.HasJupiterCollision)
         {
-            sb.AppendLine("Этот вариант недопустим: аппарат пересёк радиус Юпитера.");
-            sb.AppendLine($"Анимация обрезана по кадру столкновения: {metrics.JupiterCollisionIndex + 1}.");
+            sb.AppendLine("Ход пролёта прерван: аппарат пересёк радиус Юпитера.");
+            sb.AppendLine($"Номер кадра до столкновения: {metrics.JupiterCollisionIndex + 1}.");
         }
-        else if (!metrics.HasReturnToInitialDistance)
-            sb.AppendLine("Этот вариант недопустим: после облёта аппарат не вернулся на исходное удаление r0.");
-        else if (metrics.HasDangerouslyLowJupiterFlyby)
-            sb.AppendLine("Это предупреждение: траектория прошла ниже рекомендованной границы 2Rj.");
         else if (!metrics.HasSphereOfInfluenceCrossing)
-            sb.AppendLine("Гравитационный манёвр не сформировался корректно.");
+            sb.AppendLine("Гравитационный манёвр не сформировался.");
+        else if (!metrics.HasReturnToInitialDistance)
+            sb.AppendLine("Ход пролёта прерван: после облёта аппарат не вернулся на исходное расстояние r0.");
+        else if (metrics.HasDangerouslyLowJupiterFlyby)
+            sb.AppendLine("Есть предупреждение: минимальная высота ниже рекомендованного порога 2Rj.");
         else
-            sb.AppendLine("Траектория проходит проверку на отсутствие столкновения.");
+            sb.AppendLine("Траектория пригодна для дальнейшего анализа и оптимизации.");
 
         return sb.ToString().TrimEnd();
     }
@@ -1458,6 +1861,7 @@ public sealed class MainViewModel : ObservableObject
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Проверено траекторий: {current} / {total}");
+        sb.AppendLine($"Score = Δv - {SaturnMissPenaltyWeight:F0} * rSaturnMin");
         sb.AppendLine($"Допустимых: {validCount}, столкновений: {collisionCount}, низких пролётов: {lowFlybyCount}, без входа в SOI: {noSoiCount}, без возврата на r0: {noReturnCount}");
         if (top.Count > 0)
         {
@@ -1473,6 +1877,7 @@ public sealed class MainViewModel : ObservableObject
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Лучший score: {bestScore:F3}");
+        sb.AppendLine($"Формула score: Δv - {SaturnMissPenaltyWeight:F0} * rSaturnMin, где Δv в км/с, rSaturnMin в а.е.");
         sb.AppendLine($"Допустимых траекторий: {validCount}");
         sb.AppendLine($"Столкновений с Юпитером: {collisionCount}");
         sb.AppendLine($"Низких пролётов (< 2Rj): {lowFlybyCount}");
@@ -1513,7 +1918,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void SaveReport()
     {
-        if (_lastResult is null || _lastScenario is null || _lastSettings is null)
+        if (!HasResults || string.IsNullOrWhiteSpace(ReportText))
             return;
 
         var dlg = new SaveFileDialog
@@ -1604,7 +2009,7 @@ public sealed class MainViewModel : ObservableObject
         sb.AppendLine("## Модель");
         sb.AppendLine("Используется ньютоновская гравитация для N тел:");
         sb.AppendLine("r_i' = v_i");
-        sb.AppendLine("v_i' = ОЈ_{j!=i} G*m_j*(r_j - r_i)/|r_j - r_i|^3");
+        sb.AppendLine("v_i' = Σ_{j!=i} G*m_j*(r_j - r_i)/|r_j - r_i|^3");
         sb.AppendLine();
 
         sb.AppendLine("## Численный метод");
@@ -1834,6 +2239,15 @@ public sealed class MainViewModel : ObservableObject
         OrbitSeries = Array.Empty<LineSeries>();
         SpeedSeries = Array.Empty<LineSeries>();
         SpeedComponentSeries = Array.Empty<LineSeries>();
+        OrbitPlotTitle = "Траектории (относительно Солнца)";
+        OrbitPlotXLabel = "X (а.е.)";
+        OrbitPlotYLabel = "Y (а.е.)";
+        SpeedPlotTitle = "Скорость аппарата";
+        SpeedPlotXLabel = "t (сутки)";
+        SpeedPlotYLabel = "v (км/с)";
+        SpeedComponentPlotTitle = "Компоненты скорости";
+        SpeedComponentPlotXLabel = "t (сутки)";
+        SpeedComponentPlotYLabel = "Vx, Vy, Vz (км/с)";
         MetricsText = "Симуляция еще не запускалась.";
         ReportText = "Запустите симуляцию, и здесь появится отчет.";
         OptimizationText = "Оптимизация еще не запускалась.";

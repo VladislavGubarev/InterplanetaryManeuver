@@ -14,8 +14,8 @@ public sealed class OptimizationCandidate
 
     public override string ToString()
     {
-        return $"#{Index}: {Status}, score={Score:F3}, dV={DeltaVGainKms:F3} km/s, " +
-               $"rJmin={MinJupiterDistanceKm:n0} km, rSmin={MinSaturnDistanceAu:F3} AU, " +
-               $"phi={PhaseAngleDeg:F1} deg, alpha={HeadingAngleDeg:F1} deg, vInf={VInfinityKms:F2} km/s";
+        return $"#{Index}: {Status}, score={Score:F3}, Δv={DeltaVGainKms:F3} км/с, " +
+               $"rJmin={MinJupiterDistanceKm:n0} км, rSmin={MinSaturnDistanceAu:F3} а.е., " +
+               $"phi={PhaseAngleDeg:F1}°, alpha={HeadingAngleDeg:F1}°, v∞={VInfinityKms:F2} км/с";
     }
 }

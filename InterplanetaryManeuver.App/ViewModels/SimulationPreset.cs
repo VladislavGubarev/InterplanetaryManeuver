@@ -2,7 +2,9 @@
 
 public enum SimulationPresetKind
 {
+    IdealFlyby,
     JupiterFlyby,
+    ExtendedJupiterFlyby,
     SolarSystemBodies,
 }
 
@@ -36,6 +38,16 @@ public sealed class SimulationPreset
             {
                 Name = "Гравиманевр у Юпитера (КА, Horizons)",
                 Kind = SimulationPresetKind.JupiterFlyby,
+            },
+            new SimulationPreset
+            {
+                Name = "Расширенная система: 8 планет + КА",
+                Kind = SimulationPresetKind.ExtendedJupiterFlyby,
+            },
+            new SimulationPreset
+            {
+                Name = "Идеальный flyby (аналитика)",
+                Kind = SimulationPresetKind.IdealFlyby,
             },
             new SimulationPreset
             {

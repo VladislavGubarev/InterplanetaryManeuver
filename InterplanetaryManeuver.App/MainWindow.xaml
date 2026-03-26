@@ -296,33 +296,82 @@
                                             <TextBlock Text="Пресет" Style="{StaticResource FieldLabel}" />
                                             <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}" Margin="0,0,0,14" />
 
-                                            <TextBlock Text="Эпоха Horizons (UTC)" Style="{StaticResource FieldLabel}" />
-                                            <TextBox Text="{Binding EpochText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,14" />
+                                            <StackPanel>
+                                                <StackPanel.Style>
+                                                    <Style TargetType="{x:Type StackPanel}">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsIdealFlybyPreset}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
 
-                                            <Grid Margin="0,0,0,14">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="12" />
-                                                    <ColumnDefinition Width="*" />
-                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Эпоха Horizons (UTC)" Style="{StaticResource FieldLabel}" />
+                                                <TextBox Text="{Binding EpochText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,14" />
 
-                                                <StackPanel>
-                                                    <TextBlock Text="Фаза входа, град" Style="{StaticResource FieldLabel}" />
-                                                    <TextBox Text="{Binding PhaseAngleDeg, UpdateSourceTrigger=PropertyChanged}" />
-                                                </StackPanel>
+                                                <Grid Margin="0,0,0,14">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="12" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
 
-                                                <StackPanel Grid.Column="2">
-                                                    <TextBlock Text="Угол входа, град" Style="{StaticResource FieldLabel}" />
-                                                    <TextBox Text="{Binding HeadingAngleDeg, UpdateSourceTrigger=PropertyChanged}" />
-                                                </StackPanel>
-                                            </Grid>
+                                                    <StackPanel>
+                                                        <TextBlock Text="Фаза входа, град" Style="{StaticResource FieldLabel}" />
+                                                        <TextBox Text="{Binding PhaseAngleDeg, UpdateSourceTrigger=PropertyChanged}" />
+                                                    </StackPanel>
 
-                                            <TextBlock Text="Гиперболическая скорость V∞, км/с" Style="{StaticResource FieldLabel}" />
-                                            <TextBox Text="{Binding VInfinityKms, UpdateSourceTrigger=PropertyChanged}" />
+                                                    <StackPanel Grid.Column="2">
+                                                        <TextBlock Text="Угол входа, град" Style="{StaticResource FieldLabel}" />
+                                                        <TextBox Text="{Binding HeadingAngleDeg, UpdateSourceTrigger=PropertyChanged}" />
+                                                    </StackPanel>
+                                                </Grid>
+
+                                                <TextBlock Text="Гиперболическая скорость V∞, км/с" Style="{StaticResource FieldLabel}" />
+                                                <TextBox Text="{Binding VInfinityKms, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+
+                                            <StackPanel>
+                                                <StackPanel.Style>
+                                                    <Style TargetType="{x:Type StackPanel}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsIdealFlybyPreset}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+
+                                                <TextBlock Text="Стартовое расстояние r0, км" Style="{StaticResource FieldLabel}" />
+                                                <TextBox Text="{Binding IdealStartDistanceKm, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,14" />
+
+                                                <TextBlock Text="Минимальный радиус пролёта R, км" Style="{StaticResource FieldLabel}" />
+                                                <TextBox Text="{Binding IdealSafeRadiusKm, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,14" />
+
+                                                <TextBlock Text="Скорость Юпитера vp, км/с" Style="{StaticResource FieldLabel}" />
+                                                <TextBox Text="{Binding IdealPlanetSpeedKms, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,10" />
+
+                                                <TextBlock Text="Аналитический режим строит идеальную параболическую траекторию в системе Юпитера и оценивает прирост гелиоцентрической скорости без N-body интегрирования."
+                                                           Foreground="#BFD4E8"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
                                         </StackPanel>
                                     </Border>
 
-                                    <Border Style="{StaticResource SurfaceCard}">
+                                    <Border>
+                                        <Border.Style>
+                                            <Style TargetType="{x:Type Border}" BasedOn="{StaticResource SurfaceCard}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsIdealFlybyPreset}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <StackPanel>
                                             <TextBlock Text="Интегратор" Style="{StaticResource SectionTitle}" />
 
@@ -367,7 +416,7 @@
                                     <Border Style="{StaticResource SurfaceCard}">
                                         <StackPanel>
                                             <TextBlock Text="Команды" Style="{StaticResource SectionTitle}" />
-                                            <Button Content="Запустить RK-45"
+                                            <Button Content="Запустить расчёт"
                                                     Style="{StaticResource Button.Primary}"
                                                     Command="{Binding RunCommand}"
                                                     MinHeight="48"
@@ -436,24 +485,24 @@
                                         <controls:Plot2DControl Height="380"
                                                                 Margin="0,0,0,16"
                                                                 Series="{Binding OrbitSeries}"
-                                                                Title="Траектории (относительно Солнца)"
-                                                                XLabel="X (а.е.)"
-                                                                YLabel="Y (а.е.)"
+                                                                Title="{Binding OrbitPlotTitle}"
+                                                                XLabel="{Binding OrbitPlotXLabel}"
+                                                                YLabel="{Binding OrbitPlotYLabel}"
                                                                 EqualAspect="True" />
 
                                         <controls:Plot2DControl Height="220"
                                                                 Margin="0,0,0,16"
                                                                 Series="{Binding SpeedSeries}"
-                                                                Title="Скорость аппарата"
-                                                                XLabel="t (сутки)"
-                                                                YLabel="v (км/с)" />
+                                                                Title="{Binding SpeedPlotTitle}"
+                                                                XLabel="{Binding SpeedPlotXLabel}"
+                                                                YLabel="{Binding SpeedPlotYLabel}" />
 
                                         <controls:Plot2DControl Height="220"
                                                                 Margin="0,0,0,16"
                                                                 Series="{Binding SpeedComponentSeries}"
-                                                                Title="Компоненты скорости"
-                                                                XLabel="t (сутки)"
-                                                                YLabel="Vx, Vy, Vz (км/с)" />
+                                                                Title="{Binding SpeedComponentPlotTitle}"
+                                                                XLabel="{Binding SpeedComponentPlotXLabel}"
+                                                                YLabel="{Binding SpeedComponentPlotYLabel}" />
 
                                         <Border Style="{StaticResource SurfaceCard}" Margin="0">
                                             <StackPanel>
@@ -625,7 +674,8 @@
                             <controls:OrbitSceneControl Grid.Column="0"
                                                         Title="Сцена полёта"
                                                         SceneData="{Binding AnimationScene}"
-                                                        FrameIndex="{Binding AnimationFrameIndex}" />
+                                                        FrameIndex="{Binding AnimationFrameIndex}"
+                                                        ResetViewVersion="{Binding AnimationViewResetVersion}" />
 
                             <StackPanel Grid.Column="2">
                                 <Border Style="{StaticResource HeroCard}">
@@ -637,6 +687,10 @@
                                         <TextBlock Text="Используйте этот экран как демонстрационный режим: здесь видно движение тел по кадрам интегрирования и общий рисунок манёвра."
                                                    Foreground="#E7F5FF"
                                                    TextWrapping="Wrap" />
+                                        <TextBlock Text="Колесо мыши — зум, зажатая левая кнопка — перемещение сцены, средняя кнопка — быстрый сброс вида."
+                                                   Foreground="{StaticResource Brush.Text2}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,10,0,0" />
                                     </StackPanel>
                                 </Border>
 
@@ -673,6 +727,10 @@
                                                 MinHeight="46" />
                                         <Button Content="Сброс кадра"
                                                 Command="{Binding ResetAnimationCommand}"
+                                                Margin="0,10,0,0"
+                                                MinHeight="42" />
+                                        <Button Content="Сброс вида"
+                                                Command="{Binding ResetAnimationViewCommand}"
                                                 Margin="0,10,0,0"
                                                 MinHeight="42" />
                                     </StackPanel>

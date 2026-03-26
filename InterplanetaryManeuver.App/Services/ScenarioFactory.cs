@@ -19,6 +19,19 @@ public sealed class ScenarioFactory
         FlybySetup? flybySetup,
         CancellationToken cancellationToken)
     {
+        return kind switch
+        {
+            SimulationPresetKind.ExtendedJupiterFlyby => await CreateExtendedFlybyAsync(epochUtc, flybySetup, cancellationToken),
+            _ => await CreateBaseScenarioAsync(kind, epochUtc, flybySetup, cancellationToken),
+        };
+    }
+
+    private async Task<SimulationScenario> CreateBaseScenarioAsync(
+        SimulationPresetKind kind,
+        DateTime epochUtc,
+        FlybySetup? flybySetup,
+        CancellationToken cancellationToken)
+    {
         var sunState = await _ephemerisService.GetStateAsync("10", "Солнце", epochUtc, cancellationToken);
         var jupiterState = await _ephemerisService.GetStateAsync("599", "Юпитер", epochUtc, cancellationToken);
         var saturnState = await _ephemerisService.GetStateAsync("699", "Сатурн", epochUtc, cancellationToken);
@@ -41,12 +54,10 @@ public sealed class ScenarioFactory
         };
 
         int spacecraftIndex = -1;
-
         if (kind == SimulationPresetKind.JupiterFlyby)
         {
             FlybySetup setup = flybySetup ?? new FlybySetup();
-            BodyState spacecraft = CreateSpacecraft(jupiter, sun, setup, jupiterSoiRadius);
-            bodies.Add(spacecraft);
+            bodies.Add(CreateSpacecraft(jupiter, sun, setup, jupiterSoiRadius));
             collisionRadii.Add(0.0);
             spacecraftIndex = bodies.Count - 1;
         }
@@ -62,6 +73,83 @@ public sealed class ScenarioFactory
             JupiterIndex = 1,
             SaturnIndex = 2,
             SpacecraftIndex = spacecraftIndex,
+            EpochUtc = epochUtc,
+            UsesEphemerides = true,
+            JupiterSoiRadius = jupiterSoiRadius,
+            ToBarycentricFrame = true,
+        };
+    }
+
+    private async Task<SimulationScenario> CreateExtendedFlybyAsync(
+        DateTime epochUtc,
+        FlybySetup? flybySetup,
+        CancellationToken cancellationToken)
+    {
+        var sunTask = _ephemerisService.GetStateAsync("10", "Солнце", epochUtc, cancellationToken);
+        var mercuryTask = _ephemerisService.GetStateAsync("199", "Меркурий", epochUtc, cancellationToken);
+        var venusTask = _ephemerisService.GetStateAsync("299", "Венера", epochUtc, cancellationToken);
+        var earthTask = _ephemerisService.GetStateAsync("399", "Земля", epochUtc, cancellationToken);
+        var marsTask = _ephemerisService.GetStateAsync("499", "Марс", epochUtc, cancellationToken);
+        var jupiterTask = _ephemerisService.GetStateAsync("599", "Юпитер", epochUtc, cancellationToken);
+        var saturnTask = _ephemerisService.GetStateAsync("699", "Сатурн", epochUtc, cancellationToken);
+        var uranusTask = _ephemerisService.GetStateAsync("799", "Уран", epochUtc, cancellationToken);
+        var neptuneTask = _ephemerisService.GetStateAsync("899", "Нептун", epochUtc, cancellationToken);
+
+        await Task.WhenAll(
+            sunTask,
+            mercuryTask,
+            venusTask,
+            earthTask,
+            marsTask,
+            jupiterTask,
+            saturnTask,
+            uranusTask,
+            neptuneTask);
+
+        double jupiterSoiRadius = FlybyAnalysis.ComputeSphereOfInfluenceRadius(
+            AstronomyConstants.JupiterMass,
+            AstronomyConstants.SolarMass,
+            AstronomyConstants.JupiterSemiMajorAxis);
+
+        var bodies = new List<BodyState>
+        {
+            CreateBody(sunTask.Result, AstronomyConstants.SolarMass),
+            CreateBody(mercuryTask.Result, AstronomyConstants.MercuryMass),
+            CreateBody(venusTask.Result, AstronomyConstants.VenusMass),
+            CreateBody(earthTask.Result, AstronomyConstants.EarthMass),
+            CreateBody(marsTask.Result, AstronomyConstants.MarsMass),
+            CreateBody(jupiterTask.Result, AstronomyConstants.JupiterMass),
+            CreateBody(saturnTask.Result, AstronomyConstants.SaturnMass),
+            CreateBody(uranusTask.Result, AstronomyConstants.UranusMass),
+            CreateBody(neptuneTask.Result, AstronomyConstants.NeptuneMass),
+        };
+
+        var collisionRadii = new List<double>
+        {
+            AstronomyConstants.SolarRadius,
+            AstronomyConstants.MercuryRadius,
+            AstronomyConstants.VenusRadius,
+            AstronomyConstants.EarthRadius,
+            AstronomyConstants.MarsRadius,
+            AstronomyConstants.JupiterMeanRadius,
+            AstronomyConstants.SaturnMeanRadius,
+            AstronomyConstants.UranusRadius,
+            AstronomyConstants.NeptuneRadius,
+        };
+
+        FlybySetup setup = flybySetup ?? new FlybySetup();
+        bodies.Add(CreateSpacecraft(bodies[5], bodies[0], setup, jupiterSoiRadius));
+        collisionRadii.Add(0.0);
+
+        return new SimulationScenario
+        {
+            Name = "Расширенная система: 8 планет + КА",
+            Bodies = bodies,
+            BodyCollisionRadii = collisionRadii,
+            SunIndex = 0,
+            JupiterIndex = 5,
+            SaturnIndex = 6,
+            SpacecraftIndex = bodies.Count - 1,
             EpochUtc = epochUtc,
             UsesEphemerides = true,
             JupiterSoiRadius = jupiterSoiRadius,

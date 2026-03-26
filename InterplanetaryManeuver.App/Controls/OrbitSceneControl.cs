@@ -18,9 +18,25 @@ public sealed class OrbitSceneControl : FrameworkElement
         new Vector(0, 24),
     ];
 
+    private const double MinZoom = 0.35;
+    private const double MaxZoom = 12.0;
+
+    private double _zoomFactor = 1.0;
+    private Vector _panOffset;
+    private bool _isPanning;
+    private Point _lastPanPoint;
+    private bool _hasLayoutInfo;
+    private Rect _lastSceneRect;
+    private double _lastViewWidthAu;
+    private double _lastViewHeightAu;
+    private double _lastScale;
+    private double _lastOx;
+    private double _lastOy;
+
     public OrbitSceneControl()
     {
         ClipToBounds = true;
+        Focusable = true;
     }
 
     public static readonly DependencyProperty SceneDataProperty =
@@ -44,6 +60,13 @@ public sealed class OrbitSceneControl : FrameworkElement
             typeof(OrbitSceneControl),
             new FrameworkPropertyMetadata(string.Empty, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    public static readonly DependencyProperty ResetViewVersionProperty =
+        DependencyProperty.Register(
+            nameof(ResetViewVersion),
+            typeof(int),
+            typeof(OrbitSceneControl),
+            new FrameworkPropertyMetadata(0, FrameworkPropertyMetadataOptions.AffectsRender, OnResetViewVersionChanged));
+
     public AnimationSceneData? SceneData
     {
         get => (AnimationSceneData?)GetValue(SceneDataProperty);
@@ -60,6 +83,91 @@ public sealed class OrbitSceneControl : FrameworkElement
     {
         get => (string)GetValue(TitleProperty);
         set => SetValue(TitleProperty, value);
+    }
+
+    public int ResetViewVersion
+    {
+        get => (int)GetValue(ResetViewVersionProperty);
+        set => SetValue(ResetViewVersionProperty, value);
+    }
+
+    private static void OnResetViewVersionChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is OrbitSceneControl control)
+            control.ResetView();
+    }
+
+    protected override void OnMouseWheel(System.Windows.Input.MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+
+        if (!_hasLayoutInfo || !_lastSceneRect.Contains(e.GetPosition(this)))
+            return;
+
+        double oldScale = _lastScale;
+        double oldZoom = _zoomFactor;
+        double oldOx = _lastOx;
+        double oldOy = _lastOy;
+        Point cursor = e.GetPosition(this);
+        double zoomDelta = e.Delta > 0 ? 1.15 : 1.0 / 1.15;
+        _zoomFactor = Math.Clamp(_zoomFactor * zoomDelta, MinZoom, MaxZoom);
+
+        double newScale = oldScale * (_zoomFactor / oldZoom);
+        double newBaseOx = _lastSceneRect.Left + (_lastSceneRect.Width - _lastViewWidthAu * newScale) / 2.0;
+        double newBaseOy = _lastSceneRect.Top + (_lastSceneRect.Height - _lastViewHeightAu * newScale) / 2.0;
+        double desiredOx = cursor.X - (cursor.X - oldOx) * (newScale / oldScale);
+        double desiredOy = cursor.Y - (cursor.Y - oldOy) * (newScale / oldScale);
+        _panOffset = new Vector(desiredOx - newBaseOx, desiredOy - newBaseOy);
+
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
+    protected override void OnMouseDown(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnMouseDown(e);
+        Focus();
+
+        if (e.ChangedButton == System.Windows.Input.MouseButton.Left && _lastSceneRect.Contains(e.GetPosition(this)))
+        {
+            _isPanning = true;
+            _lastPanPoint = e.GetPosition(this);
+            CaptureMouse();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.ChangedButton == System.Windows.Input.MouseButton.Middle)
+        {
+            ResetView();
+            e.Handled = true;
+        }
+    }
+
+    protected override void OnMouseMove(System.Windows.Input.MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+
+        if (!_isPanning)
+            return;
+
+        Point current = e.GetPosition(this);
+        Vector delta = current - _lastPanPoint;
+        _panOffset += delta;
+        _lastPanPoint = current;
+        InvalidateVisual();
+    }
+
+    protected override void OnMouseUp(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnMouseUp(e);
+
+        if (e.ChangedButton != System.Windows.Input.MouseButton.Left || !_isPanning)
+            return;
+
+        _isPanning = false;
+        ReleaseMouseCapture();
+        e.Handled = true;
     }
 
     protected override void OnRender(DrawingContext dc)
@@ -112,10 +220,18 @@ public sealed class OrbitSceneControl : FrameworkElement
         double sx = sceneRect.Width / Math.Max(1e-12, maxX - minX);
         double sy = sceneRect.Height / Math.Max(1e-12, maxY - minY);
         double scale = Math.Min(sx, sy);
+        scale *= _zoomFactor;
         double usedW = (maxX - minX) * scale;
         double usedH = (maxY - minY) * scale;
-        double ox = sceneRect.Left + (sceneRect.Width - usedW) / 2.0;
-        double oy = sceneRect.Top + (sceneRect.Height - usedH) / 2.0;
+        double ox = sceneRect.Left + (sceneRect.Width - usedW) / 2.0 + _panOffset.X;
+        double oy = sceneRect.Top + (sceneRect.Height - usedH) / 2.0 + _panOffset.Y;
+        _hasLayoutInfo = true;
+        _lastSceneRect = sceneRect;
+        _lastViewWidthAu = maxX - minX;
+        _lastViewHeightAu = maxY - minY;
+        _lastScale = scale;
+        _lastOx = ox;
+        _lastOy = oy;
 
         Point Map(Vector3d p)
         {
@@ -149,7 +265,17 @@ public sealed class OrbitSceneControl : FrameworkElement
         }
 
         DrawLegend(dc, data);
+        DrawZoomHint(dc, sceneRect);
         dc.Pop();
+    }
+
+    private void ResetView()
+    {
+        _zoomFactor = 1.0;
+        _panOffset = default;
+        _isPanning = false;
+        ReleaseMouseCapture();
+        InvalidateVisual();
     }
 
     private static (double minX, double maxX, double minY, double maxY) ComputeBounds(AnimationSceneData data)
@@ -331,6 +457,22 @@ public sealed class OrbitSceneControl : FrameworkElement
         }
     }
 
+    private void DrawZoomHint(DrawingContext dc, Rect sceneRect)
+    {
+        string zoomText = $"Масштаб: {_zoomFactor:F2}x  |  Колесо: зум  |  Средняя кнопка: сброс";
+        var hintText = CreateText(
+            zoomText,
+            11,
+            (Brush?)TryFindResource("Brush.Text2") ?? Brushes.LightGray,
+            FontWeights.Normal,
+            "Segoe UI Variable Display");
+
+        Rect hintRect = new(sceneRect.Right - hintText.Width - 18, sceneRect.Bottom - hintText.Height - 10, hintText.Width + 10, hintText.Height + 6);
+        var hintBg = new SolidColorBrush(Color.FromArgb(0x96, 0x0F, 0x15, 0x1E));
+        dc.DrawRoundedRectangle(hintBg, null, hintRect, 8, 8);
+        dc.DrawText(hintText, new Point(hintRect.Left + 5, hintRect.Top + 3));
+    }
+
     private FormattedText CreateText(string text, double size, Brush brush, FontWeight weight, string fontFamily)
     {
         return new FormattedText(
@@ -363,10 +505,22 @@ public sealed class OrbitSceneControl : FrameworkElement
         string normalized = bodyName.Trim().ToLowerInvariant();
         if (normalized.Contains("sun") || normalized.Contains("солн"))
             return "☀";
+        if (normalized.Contains("mercury") || normalized.Contains("меркур"))
+            return "☿";
+        if (normalized.Contains("venus") || normalized.Contains("венер"))
+            return "♀";
+        if (normalized.Contains("earth") || normalized.Contains("земл"))
+            return "♁";
+        if (normalized.Contains("mars") || normalized.Contains("марс"))
+            return "♂";
         if (normalized.Contains("jupiter") || normalized.Contains("юпит"))
             return "♃";
         if (normalized.Contains("saturn") || normalized.Contains("сатур"))
             return "♄";
+        if (normalized.Contains("uranus") || normalized.Contains("уран"))
+            return "♅";
+        if (normalized.Contains("neptune") || normalized.Contains("нептун"))
+            return "♆";
         if (IsSpacecraft(bodyName))
             return "🚀";
 
