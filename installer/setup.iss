@@ -2,7 +2,7 @@
 ; Build output must be in ..\dist\publish (see build.ps1)
 
 #define MyAppName "Межпланетный маневр"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "VladAndMasha"
 #define MyAppExeName "InterplanetaryManeuver.App.exe"
 #define MyAppIconName "InterplanetaryManeuver.ico"

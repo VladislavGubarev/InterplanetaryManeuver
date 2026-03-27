@@ -18,6 +18,7 @@ namespace InterplanetaryManeuver.App.ViewModels;
 public sealed class MainViewModel : ObservableObject
 {
     private const double SaturnMissPenaltyWeight = 40.0;
+    private const int IdealOptimizationMaxIterations = 24;
 
     private static readonly SolidColorBrush SunBrush = new(Color.FromRgb(0xFF, 0xD2, 0x4A));
     private static readonly SolidColorBrush JupiterBrush = new(Color.FromRgb(0x5A, 0xE4, 0xFF));
@@ -623,7 +624,8 @@ public sealed class MainViewModel : ObservableObject
     {
         return !IsRunning &&
                (SelectedPreset?.Kind == SimulationPresetKind.JupiterFlyby ||
-                SelectedPreset?.Kind == SimulationPresetKind.ExtendedJupiterFlyby);
+                SelectedPreset?.Kind == SimulationPresetKind.ExtendedJupiterFlyby ||
+                SelectedPreset?.Kind == SimulationPresetKind.IdealFlyby);
     }
 
     private async Task RunAsync()
@@ -699,6 +701,37 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task OptimizeAsync()
     {
+        if (SelectedPreset?.Kind == SimulationPresetKind.IdealFlyby)
+        {
+            SetBusyState("Аналитическая оптимизация идеального flyby...");
+
+            try
+            {
+                IdealOptimizationResult optimization = OptimizeIdealFlybyAnalytically();
+                IdealSafeRadiusKm = optimization.OptimalRadiusKm;
+
+                IdealFlybyResult ideal = ComputeIdealFlyby();
+                ApplyIdealFlybyOutputs(ideal);
+                OptimizationText = BuildIdealOptimizationText(optimization);
+                StatusText = $"Аналитическая оптимизация завершена. Лучший Δv = {optimization.BestDeltaVKms:F3} км/с";
+            }
+            catch (OperationCanceledException)
+            {
+                ApplyCanceledState();
+            }
+            catch (Exception ex)
+            {
+                ApplyErrorState(ex);
+                OptimizationText = ex.Message;
+            }
+            finally
+            {
+                IsRunning = false;
+            }
+
+            return;
+        }
+
         if (SelectedPreset?.Kind != SimulationPresetKind.JupiterFlyby &&
             SelectedPreset?.Kind != SimulationPresetKind.ExtendedJupiterFlyby)
         {
@@ -1571,6 +1604,154 @@ public sealed class MainViewModel : ObservableObject
             MetricsText = metrics.ToString().TrimEnd(),
             ReportText = report.ToString().TrimEnd(),
         };
+    }
+
+    private readonly record struct IdealOptimizationResult(
+        double InitialRadiusKm,
+        double OptimalRadiusKm,
+        double LowerBoundKm,
+        double UpperBoundKm,
+        double InitialDeltaVKms,
+        double BestDeltaVKms,
+        double FinalDerivative,
+        int Iterations);
+
+    private IdealOptimizationResult OptimizeIdealFlybyAnalytically()
+    {
+        double r0 = IdealStartDistanceKm * 1000.0;
+        double initialQ = IdealSafeRadiusKm * 1000.0;
+        double vp = IdealPlanetSpeedKms * 1000.0;
+        double qLower = Math.Max(AstronomyConstants.JupiterLowFlybyDistance, AstronomyConstants.JupiterMeanRadius * 1.01);
+        double qUpper = r0 * 0.98;
+
+        if (qUpper <= qLower)
+            throw new InvalidOperationException("Для аналитической оптимизации нужно, чтобы r0 было заметно больше минимального радиуса пролёта.");
+
+        double q = Math.Clamp(initialQ, qLower, qUpper);
+        double bestQ = q;
+        double bestDeltaV = EvaluateIdealFlybyDeltaV(r0, q, vp) / 1000.0;
+        double initialDeltaV = bestDeltaV;
+        double step = Math.Max((qUpper - qLower) * 0.12, 50_000.0);
+        double finalDerivative = 0.0;
+        int iterations = 0;
+
+        for (int i = 0; i < IdealOptimizationMaxIterations; i++)
+        {
+            iterations = i + 1;
+            double derivativeStep = Math.Max(q * 0.001, 1_000.0);
+            double derivative = EvaluateIdealFlybyDerivative(r0, q, vp, derivativeStep);
+            finalDerivative = derivative;
+
+            if (Math.Abs(derivative) < 1e-10)
+                break;
+
+            double direction = Math.Sign(derivative);
+            double candidateQ = Math.Clamp(q + direction * step, qLower, qUpper);
+            double candidateDeltaV = EvaluateIdealFlybyDeltaV(r0, candidateQ, vp) / 1000.0;
+
+            if (candidateDeltaV > bestDeltaV + 1e-9)
+            {
+                q = candidateQ;
+                bestQ = candidateQ;
+                bestDeltaV = candidateDeltaV;
+                step = Math.Min(step * 1.2, (qUpper - qLower) * 0.5);
+                continue;
+            }
+
+            step *= 0.5;
+            if (step < 100.0)
+                break;
+        }
+
+        double lowerDeltaV = EvaluateIdealFlybyDeltaV(r0, qLower, vp) / 1000.0;
+        if (lowerDeltaV > bestDeltaV)
+        {
+            bestDeltaV = lowerDeltaV;
+            bestQ = qLower;
+        }
+
+        double upperDeltaV = EvaluateIdealFlybyDeltaV(r0, qUpper, vp) / 1000.0;
+        if (upperDeltaV > bestDeltaV)
+        {
+            bestDeltaV = upperDeltaV;
+            bestQ = qUpper;
+        }
+
+        return new IdealOptimizationResult(
+            initialQ / 1000.0,
+            bestQ / 1000.0,
+            qLower / 1000.0,
+            qUpper / 1000.0,
+            initialDeltaV,
+            bestDeltaV,
+            finalDerivative,
+            iterations);
+    }
+
+    private static string BuildIdealOptimizationText(IdealOptimizationResult result)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Аналитическая оптимизация идеального flyby");
+        sb.AppendLine($"Диапазон поиска R: [{result.LowerBoundKm:n0}; {result.UpperBoundKm:n0}] км");
+        sb.AppendLine($"Стартовое значение R: {result.InitialRadiusKm:n0} км");
+        sb.AppendLine($"Оптимальное значение R: {result.OptimalRadiusKm:n0} км");
+        sb.AppendLine($"Δv до оптимизации: {result.InitialDeltaVKms:F6} км/с");
+        sb.AppendLine($"Δv после оптимизации: {result.BestDeltaVKms:F6} км/с");
+        sb.AppendLine($"Прирост от оптимизации: {result.BestDeltaVKms - result.InitialDeltaVKms:F6} км/с");
+        sb.AppendLine($"Итераций: {result.Iterations}");
+        sb.AppendLine($"Финальная производная d(Δv)/dR: {result.FinalDerivative:E3}");
+        sb.AppendLine();
+        sb.AppendLine("В этом режиме производная считается по аналитической формуле flyby, без моделирования полной N-body траектории.");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static double EvaluateIdealFlybyDeltaV(double r0, double q, double vp)
+    {
+        var state = EvaluateIdealFlybyState(r0, q, vp);
+        return state.FinalHeliocentricSpeed - state.InitialHeliocentricSpeed;
+    }
+
+    private static double EvaluateIdealFlybyDerivative(double r0, double q, double vp, double dq)
+    {
+        double lower = Math.Max(AstronomyConstants.JupiterLowFlybyDistance, q - dq);
+        double upper = Math.Min(r0 * 0.98, q + dq);
+
+        if (upper <= lower)
+            return 0.0;
+
+        double plus = EvaluateIdealFlybyDeltaV(r0, upper, vp);
+        double minus = EvaluateIdealFlybyDeltaV(r0, lower, vp);
+        return (plus - minus) / (upper - lower);
+    }
+
+    private static (double InitialHeliocentricSpeed, double FinalHeliocentricSpeed, double TurnAngleDeg, double StartRelativeSpeed, double PericenterSpeed) EvaluateIdealFlybyState(double r0, double q, double vp)
+    {
+        if (q <= AstronomyConstants.JupiterMeanRadius)
+            throw new InvalidOperationException("Радиус пролёта должен быть больше радиуса Юпитера.");
+        if (r0 <= q)
+            throw new InvalidOperationException("Стартовое расстояние должно быть больше радиуса пролёта.");
+
+        double mu = 6.67430e-11 * AstronomyConstants.JupiterMass;
+        double cosNu = Clamp(2.0 * q / r0 - 1.0, -1.0, 1.0);
+        double nuLimit = Math.Acos(cosNu);
+
+        Vector startTangent = new(-Math.Sin(-nuLimit), 1.0 + Math.Cos(-nuLimit));
+        Vector endTangent = new(-Math.Sin(nuLimit), 1.0 + Math.Cos(nuLimit));
+        startTangent.Normalize();
+        endTangent.Normalize();
+
+        double rotation = -Math.Atan2(endTangent.Y, endTangent.X);
+        startTangent = Rotate(startTangent, rotation);
+        endTangent = Rotate(endTangent, rotation);
+
+        double startRelativeSpeed = Math.Sqrt(2.0 * mu / r0);
+        double pericenterSpeed = Math.Sqrt(2.0 * mu / q);
+
+        Vector vIn = new(startTangent.X * startRelativeSpeed + vp, startTangent.Y * startRelativeSpeed);
+        Vector vOut = new(endTangent.X * startRelativeSpeed + vp, endTangent.Y * startRelativeSpeed);
+        double turnAngleDeg = Math.Acos(Clamp(startTangent.X * endTangent.X + startTangent.Y * endTangent.Y, -1.0, 1.0)) * 180.0 / Math.PI;
+
+        return (vIn.Length, vOut.Length, turnAngleDeg, startRelativeSpeed, pericenterSpeed);
     }
 
     private void BuildPlots(SimulationResult result, SimulationScenario scenario)

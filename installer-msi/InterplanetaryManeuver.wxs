@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
-    Name="Межпланетный маневр"
+    Name="Межпланетный манёвр"
     Manufacturer="VladAndMasha"
-    Version="0.1.0"
+    Version="0.2.0"
     UpgradeCode="{4D4D1A3E-19D8-4207-9B7A-EDC97D1C06B6}"
     ProductCode="*"
     Language="1049"
@@ -17,19 +17,19 @@
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="Межпланетный маневр" />
+      <Directory Id="INSTALLFOLDER" Name="Межпланетный манёвр" />
     </StandardDirectory>
 
     <StandardDirectory Id="ProgramMenuFolder">
-      <Directory Id="ProgramMenuDir" Name="Межпланетный маневр" />
+      <Directory Id="ProgramMenuDir" Name="Межпланетный манёвр" />
     </StandardDirectory>
 
     <StandardDirectory Id="DesktopFolder">
       <Component Id="cmpDesktop" Guid="{9F6D8E13-0F23-4D5B-BE70-6E521A1559B2}">
         <Shortcut
           Id="scDesktop"
-          Name="Межпланетный маневр"
-          Description="Межпланетный маневр"
+          Name="Межпланетный манёвр"
+          Description="Межпланетный манёвр"
           Target="[INSTALLFOLDER]InterplanetaryManeuver.App.exe"
           WorkingDirectory="INSTALLFOLDER"
           Icon="AppIcon" />
@@ -48,8 +48,8 @@
       <Component Id="cmpStartMenu" Guid="{3EE9B20C-11C5-46D2-8DCE-1C1B04C8D4DB}">
         <Shortcut
           Id="scStartMenu"
-          Name="Межпланетный маневр"
-          Description="Межпланетный маневр"
+          Name="Межпланетный манёвр"
+          Description="Межпланетный манёвр"
           Target="[INSTALLFOLDER]InterplanetaryManeuver.App.exe"
           WorkingDirectory="INSTALLFOLDER"
           Icon="AppIcon" />
@@ -58,7 +58,7 @@
       </Component>
     </DirectoryRef>
 
-    <Feature Id="MainFeature" Title="Межпланетный маневр" Level="1">
+    <Feature Id="MainFeature" Title="Межпланетный манёвр" Level="1">
       <ComponentRef Id="cmpMain" />
       <ComponentRef Id="cmpStartMenu" />
       <ComponentRef Id="cmpDesktop" />

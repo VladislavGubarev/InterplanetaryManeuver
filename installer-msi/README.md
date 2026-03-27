@@ -18,5 +18,4 @@
 
 Результат:
 
-- `dist\installer\InterplanetaryManeuver_0.1.0_x64.msi`
-
+- `dist\installer\InterplanetaryManeuver_0.2.0_x64.msi`

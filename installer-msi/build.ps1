@@ -11,8 +11,8 @@ $publishDir = Join-Path $root 'dist\publish'
 $brandingDir = Join-Path $root 'assets\branding'
 $wxs = Join-Path $PSScriptRoot 'InterplanetaryManeuver.wxs'
 $outDir = Join-Path $root 'dist\installer'
-$outMsi = Join-Path $outDir 'InterplanetaryManeuver_0.1.0_x64.msi'
-$outPdb = Join-Path $outDir 'InterplanetaryManeuver_0.1.0_x64.wixpdb'
+$outMsi = Join-Path $outDir 'InterplanetaryManeuver_0.2.0_x64.msi'
+$outPdb = Join-Path $outDir 'InterplanetaryManeuver_0.2.0_x64.wixpdb'
 
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $outPdb
