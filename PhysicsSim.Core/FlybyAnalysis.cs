@@ -2,6 +2,11 @@ namespace PhysicsSim.Core;
 
 public static class FlybyAnalysis
 {
+    /// <summary>
+    /// Радиус сферы влияния по стандартной приближенной формуле Лапласа:
+    /// r_soi = a * (m / M)^(2/5)
+    /// Здесь a — большая полуось орбиты планеты вокруг центрального тела.
+    /// </summary>
     public static double ComputeSphereOfInfluenceRadius(double planetMass, double centralMass, double semiMajorAxis)
     {
         return semiMajorAxis * Math.Pow(planetMass / centralMass, 2.0 / 5.0);
@@ -43,19 +48,29 @@ public static class FlybyAnalysis
                 minDistJIndex = i;
             }
 
+            // Вход и выход из SOI нужны, чтобы отдельно анализировать локальный
+            // участок гравитационного маневра около Юпитера.
             bool inside = distJ <= planetSoiRadius;
             if (inside && !insidePrev && entryIndex < 0)
                 entryIndex = i;
             if (!inside && insidePrev && entryIndex >= 0 && exitIndex < 0)
                 exitIndex = i;
+
+            // Для расширенной модели явно помечаем кадр, когда КА пересек радиус Юпитера.
             if (collisionIndex < 0 && distJ <= AstronomyConstants.JupiterMeanRadius)
                 collisionIndex = i;
+
+            // В новой метрике сравниваем скорости не "где-то потом", а при возврате
+            // на то же расстояние от Юпитера, с которого начинался заход.
             if (equalDistanceIndex < 0 && i > minDistJIndex && distJ >= initialDistanceToJupiter)
                 equalDistanceIndex = i;
+
             insidePrev = inside;
 
             if (saturnIndex >= 0 && saturnIndex < result.BodyCount)
             {
+                // Минимальная дистанция до Сатурна полезна как отдельная метрика качества:
+                // она показывает, насколько траектория вообще ведет аппарат в сторону цели.
                 double distS = (result.Positions[i][spacecraftIndex] - result.Positions[i][saturnIndex]).Length();
                 if (distS < minDistSaturn)
                     minDistSaturn = distS;
@@ -69,16 +84,23 @@ public static class FlybyAnalysis
 
         int vInIndex = 0;
         int vOutIndex = equalDistanceIndex > vInIndex ? equalDistanceIndex : result.SampleCount - 1;
+        double finalDistanceToJupiter = (result.Positions[vOutIndex][spacecraftIndex] - result.Positions[vOutIndex][planetIndex]).Length();
 
-        double initialHeliocentricSpeed = RelativeSpeed(result, spacecraftIndex, sunIndex, 0);
+        // Главная скорость для оценки выигрыша — гелиоцентрическая.
+        // Именно она отвечает за межпланетный "разгон" аппарата.
+        double initialHeliocentricSpeed = RelativeSpeed(result, spacecraftIndex, sunIndex, vInIndex);
         double finalHeliocentricSpeed = RelativeSpeed(result, spacecraftIndex, sunIndex, vOutIndex);
-        double initialJupiterRelativeSpeed = RelativeSpeed(result, spacecraftIndex, planetIndex, 0);
+
+        // Скорости в системе Юпитера тоже сохраняем: по ним удобно показывать,
+        // что гравиманевр в системе планеты в основном поворачивает вектор скорости.
+        double initialJupiterRelativeSpeed = RelativeSpeed(result, spacecraftIndex, planetIndex, vInIndex);
         double finalJupiterRelativeSpeed = RelativeSpeed(result, spacecraftIndex, planetIndex, vOutIndex);
         double deltaVGain = finalHeliocentricSpeed - initialHeliocentricSpeed;
 
         return new FlybyMetrics
         {
             InitialDistanceToJupiter = initialDistanceToJupiter,
+            FinalDistanceToJupiter = finalDistanceToJupiter,
             JupiterSoiRadius = planetSoiRadius,
             MinDistanceToJupiter = minDistJ,
             MinDistanceToSaturn = minDistSaturn,

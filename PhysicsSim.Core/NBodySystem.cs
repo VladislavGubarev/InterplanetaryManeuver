@@ -1,9 +1,10 @@
 namespace PhysicsSim.Core;
 
 /// <summary>
-/// Ньютоновская N-body модель гравитации:
+/// Ньютоновская N-body модель.
+/// Для каждого тела хранятся координаты и скорости:
 /// r_i' = v_i
-/// v_i' = sum_{j!=i} G*m_j*(r_j - r_i)/|r_j-r_i|^3
+/// v_i' = sum_{j!=i} G * m_j * (r_j - r_i) / |r_j - r_i|^3
 /// </summary>
 public sealed class NBodySystem : IOdeSystem
 {
@@ -12,7 +13,7 @@ public sealed class NBodySystem : IOdeSystem
     public double[] Masses { get; }
 
     public int BodyCount => Masses.Length;
-    public int Dimension => BodyCount * 6; // По 6 компонент на тело: (x,y,z,vx,vy,vz)
+    public int Dimension => BodyCount * 6; // На тело: x, y, z, vx, vy, vz.
 
     public NBodySystem(double gravitationalConstant, IReadOnlyList<BodyState> bodies, bool toBarycentricFrame = true)
     {
@@ -31,17 +32,17 @@ public sealed class NBodySystem : IOdeSystem
 
         InitialState = new double[Dimension];
         for (int i = 0; i < bodies.Count; i++)
-        {
             WriteBodyState(InitialState, i, bodies[i].Position, bodies[i].Velocity);
-        }
 
         if (toBarycentricFrame)
             ShiftInitialStateToBarycentricFrame();
     }
 
     /// <summary>
-    /// Начальный вектор состояния в барицентрической системе отсчёта (если включена).
-    /// Формат: [x,y,z,vx,vy,vz] для каждого тела подряд.
+    /// Начальный вектор состояния.
+    /// Формат: [x, y, z, vx, vy, vz] для каждого тела подряд.
+    /// При барицентрическом режиме из координат и скоростей уже вычтены
+    /// положение и скорость центра масс всей системы.
     /// </summary>
     public double[] InitialState { get; }
 
@@ -50,7 +51,7 @@ public sealed class NBodySystem : IOdeSystem
         if (y.Length != Dimension) throw new ArgumentException("Invalid state length.", nameof(y));
         if (dy.Length != Dimension) throw new ArgumentException("Invalid derivative length.", nameof(dy));
 
-        // Производные координат равны скоростям.
+        // Кинематика: производная координаты равна текущей скорости.
         for (int i = 0; i < BodyCount; i++)
         {
             int baseIdx = i * 6;
@@ -59,7 +60,7 @@ public sealed class NBodySystem : IOdeSystem
             dy[baseIdx + 2] = y[baseIdx + 5];
         }
 
-        // Производные скоростей определяются суммой гравитационных ускорений.
+        // Динамика: суммируем гравитационные ускорения от остальных тел.
         for (int i = 0; i < BodyCount; i++)
         {
             int bi = i * 6;
@@ -71,9 +72,12 @@ public sealed class NBodySystem : IOdeSystem
 
             for (int j = 0; j < BodyCount; j++)
             {
-                if (j == i) continue;
+                if (j == i)
+                    continue;
+
                 double mj = Masses[j];
-                if (mj == 0) continue;
+                if (mj == 0)
+                    continue;
 
                 int bj = j * 6;
                 double dx = y[bj + 0] - xi;
@@ -81,8 +85,10 @@ public sealed class NBodySystem : IOdeSystem
                 double dz = y[bj + 2] - zi;
 
                 double r2 = dx * dx + dyv * dyv + dz * dz;
-                if (r2 == 0) continue;
+                if (r2 == 0)
+                    continue;
 
+                // Формула Ньютона: a = G * m / r^3 * r_vec.
                 double invR = 1.0 / Math.Sqrt(r2);
                 double invR3 = invR * invR * invR;
                 double k = GravitationalConstant * mj * invR3;
@@ -123,20 +129,26 @@ public sealed class NBodySystem : IOdeSystem
         var comVel = Vector3d.Zero;
         double mTotal = 0;
 
+        // Сначала вычисляем положение и скорость центра масс.
         for (int i = 0; i < BodyCount; i++)
         {
             double m = Masses[i];
-            if (m <= 0) continue;
+            if (m <= 0)
+                continue;
+
             mTotal += m;
             int b = i * 6;
             comPos += m * new Vector3d(InitialState[b + 0], InitialState[b + 1], InitialState[b + 2]);
             comVel += m * new Vector3d(InitialState[b + 3], InitialState[b + 4], InitialState[b + 5]);
         }
 
-        if (mTotal == 0) return;
+        if (mTotal == 0)
+            return;
+
         comPos /= mTotal;
         comVel /= mTotal;
 
+        // Затем переносим всю систему в систему отсчета центра масс.
         for (int i = 0; i < BodyCount; i++)
         {
             int b = i * 6;

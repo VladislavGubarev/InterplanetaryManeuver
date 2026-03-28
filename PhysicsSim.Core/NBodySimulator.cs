@@ -4,6 +4,11 @@ namespace PhysicsSim.Core;
 
 public static class NBodySimulator
 {
+    /// <summary>
+    /// Запускает интегрирование системы и сохраняет снимки траектории
+    /// в фиксированные моменты времени. Эти снимки потом используются
+    /// для графиков, анимации и анализа пролета.
+    /// </summary>
     public static SimulationResult Simulate(
         NBodySystem system,
         double t0,
@@ -28,6 +33,8 @@ public static class NBodySimulator
             settings,
             (t, y) =>
             {
+                // На каждом сэмпле раскладываем общий вектор состояния
+                // обратно в массивы положений и скоростей по телам.
                 times.Add(t);
                 var pos = new Vector3d[system.BodyCount];
                 var vel = new Vector3d[system.BodyCount];
@@ -43,6 +50,8 @@ public static class NBodySimulator
             },
             (t, state) =>
             {
+                // Столкновение — жесткое условие остановки. Это не штраф, а признак,
+                // что траектория уже физически недопустима.
                 collision = TryDetectCollision(system, state, collisionRadii, t);
                 if (collision is not null)
                     return $"Столкновение: {collision.BodyAName} ↔ {collision.BodyBName}";
@@ -68,6 +77,8 @@ public static class NBodySimulator
         IReadOnlyList<double>? collisionRadii,
         double time)
     {
+        // Простая геометрическая модель: если расстояние между центрами тел
+        // меньше суммы их радиусов, фиксируем столкновение.
         if (collisionRadii is null || collisionRadii.Count != system.BodyCount)
             return null;
 

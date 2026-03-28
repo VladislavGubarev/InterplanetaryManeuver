@@ -3,6 +3,7 @@ namespace PhysicsSim.Core;
 public sealed class FlybyMetrics
 {
     public required double InitialDistanceToJupiter { get; init; }
+    public required double FinalDistanceToJupiter { get; init; }
     public required double JupiterSoiRadius { get; init; }
     public required double MinDistanceToJupiter { get; init; }
     public required double MinDistanceToSaturn { get; init; }

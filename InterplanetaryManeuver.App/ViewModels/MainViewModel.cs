@@ -18,6 +18,10 @@ namespace InterplanetaryManeuver.App.ViewModels;
 public sealed class MainViewModel : ObservableObject
 {
     private const double SaturnMissPenaltyWeight = 40.0;
+    private const double SoiMissPenaltyWeight = 120.0;
+    private const double ReturnPenaltyWeight = 180.0;
+    private const double LowFlybyPenaltyWeight = 36.0;
+    private const double CollisionPenaltyWeight = 1_000_000.0;
     private const int IdealOptimizationMaxIterations = 24;
 
     private static readonly SolidColorBrush SunBrush = new(Color.FromRgb(0xFF, 0xD2, 0x4A));
@@ -1928,18 +1932,43 @@ public sealed class MainViewModel : ObservableObject
 
     private static double ScoreCandidate(FlybyMetrics metrics)
     {
-        if (metrics.HasJupiterCollision)
-            return -1e12;
-
-        if (!metrics.HasSphereOfInfluenceCrossing)
-            return -1e9;
-
-        if (!metrics.HasReturnToInitialDistance)
-            return -1e10;
-
         double deltaVGainKms = metrics.DeltaVGainHeliocentric / 1000.0;
         double saturnMissAu = metrics.MinDistanceToSaturn / AstronomyConstants.AstronomicalUnit;
-        return deltaVGainKms - SaturnMissPenaltyWeight * saturnMissAu;
+        double saturnPenalty = SaturnMissPenaltyWeight * saturnMissAu;
+
+        // Гладкие штрафы делают score непрерывнее около границ допустимости.
+        // Это не автодифф, но локальная доводка с конечными разностями работает стабильнее.
+        double lowFlybyGap = (AstronomyConstants.JupiterLowFlybyDistance - metrics.MinDistanceToJupiter)
+            / AstronomyConstants.JupiterLowFlybyDistance;
+        double collisionGap = (AstronomyConstants.JupiterMeanRadius - metrics.MinDistanceToJupiter)
+            / AstronomyConstants.JupiterMeanRadius;
+        double soiMissGap = (metrics.MinDistanceToJupiter - metrics.JupiterSoiRadius)
+            / Math.Max(metrics.JupiterSoiRadius, 1.0);
+        double returnGap = (metrics.InitialDistanceToJupiter - metrics.FinalDistanceToJupiter)
+            / Math.Max(metrics.InitialDistanceToJupiter, 1.0);
+
+        double lowFlybyPenalty = SmoothQuadraticPenalty(lowFlybyGap, LowFlybyPenaltyWeight);
+        double collisionPenalty = SmoothQuadraticPenalty(collisionGap, CollisionPenaltyWeight);
+        double soiMissPenalty = SmoothQuadraticPenalty(soiMissGap, SoiMissPenaltyWeight);
+        double returnPenalty = SmoothQuadraticPenalty(returnGap, ReturnPenaltyWeight);
+
+        return deltaVGainKms
+            - saturnPenalty
+            - lowFlybyPenalty
+            - collisionPenalty
+            - soiMissPenalty
+            - returnPenalty;
+    }
+
+    private static double SmoothQuadraticPenalty(double normalizedGap, double weight)
+    {
+        double hinge = SmoothPositive(normalizedGap);
+        return weight * hinge * hinge;
+    }
+
+    private static double SmoothPositive(double value, double epsilon = 1e-9)
+    {
+        return 0.5 * (value + Math.Sqrt(value * value + epsilon));
     }
 
     private static string DescribeFlybyStatus(FlybyMetrics metrics)
@@ -2042,7 +2071,8 @@ public sealed class MainViewModel : ObservableObject
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Проверено траекторий: {current} / {total}");
-        sb.AppendLine($"Score = Δv - {SaturnMissPenaltyWeight:F0} * rSaturnMin");
+        sb.AppendLine($"Score = Δv - {SaturnMissPenaltyWeight:F0} * rSaturnMin - Pгладк");
+        sb.AppendLine($"Pгладк = {SoiMissPenaltyWeight:F0}*missSOI^2 + {ReturnPenaltyWeight:F0}*missR0^2 + {LowFlybyPenaltyWeight:F0}*lowJ^2 + {CollisionPenaltyWeight:E0}*collJ^2");
         sb.AppendLine($"Допустимых: {validCount}, столкновений: {collisionCount}, низких пролётов: {lowFlybyCount}, без входа в SOI: {noSoiCount}, без возврата на r0: {noReturnCount}");
         if (top.Count > 0)
         {
@@ -2058,7 +2088,8 @@ public sealed class MainViewModel : ObservableObject
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Лучший score: {bestScore:F3}");
-        sb.AppendLine($"Формула score: Δv - {SaturnMissPenaltyWeight:F0} * rSaturnMin, где Δv в км/с, rSaturnMin в а.е.");
+        sb.AppendLine($"Формула score: Δv - {SaturnMissPenaltyWeight:F0} * rSaturnMin - Pгладк.");
+        sb.AppendLine($"Pгладк = {SoiMissPenaltyWeight:F0}*missSOI^2 + {ReturnPenaltyWeight:F0}*missR0^2 + {LowFlybyPenaltyWeight:F0}*lowJ^2 + {CollisionPenaltyWeight:E0}*collJ^2.");
         sb.AppendLine($"Допустимых траекторий: {validCount}");
         sb.AppendLine($"Столкновений с Юпитером: {collisionCount}");
         sb.AppendLine($"Низких пролётов (< 2Rj): {lowFlybyCount}");
